@@ -14,6 +14,8 @@ const UNIT_COLORS := {
 }
 
 var station_id := ""
+## Tutorial pulse (day 1, tea station) even when nothing is ready.
+var hint := false
 var _icon: Icon
 var _name: Label
 var _key: Label
@@ -27,6 +29,8 @@ var _locked := false
 var _pulse := 0.0
 var _ready_flag := false
 var _blink := false
+## One stylebox per button, recoloured in place (the ready pulse changes it every frame).
+var _sb: StyleBoxFlat
 
 static var _unit_styles: Dictionary = {}
 
@@ -110,12 +114,15 @@ func _refresh_style() -> void:
 		border = Palette.UI_AMBER
 	if _ready_flag and not _locked:
 		border = Palette.UI_AMBER.lerp(Color(1, 0.7, 0.3), 0.5 + 0.5 * sin(_pulse * 6.0)) if not _hover else Palette.UI_AMBER
-	var sb := UiKit.box(bg, 13, border, 2)
-	sb.content_margin_top = 4
-	sb.content_margin_bottom = 6
-	sb.content_margin_left = 6
-	sb.content_margin_right = 6
-	add_theme_stylebox_override("panel", sb)
+	if _sb == null:
+		_sb = UiKit.box(bg, 13, border, 2)
+		_sb.content_margin_top = 4
+		_sb.content_margin_bottom = 6
+		_sb.content_margin_left = 6
+		_sb.content_margin_right = 6
+		add_theme_stylebox_override("panel", _sb)
+	_sb.bg_color = bg
+	_sb.border_color = border
 	modulate = Color(1, 1, 1, 0.38) if _locked else Color.WHITE
 
 
@@ -143,6 +150,7 @@ func set_info(locked: bool, units: Array[Dictionary], count: int, blink: bool) -
 			_bar_states[i] = st
 			bar.add_theme_stylebox_override("fill", _unit_style(st if st != "empty" else "progress"))
 		any_ready = any_ready or st == "ready" or st == "warn"
+	any_ready = any_ready or hint
 	_blink = blink
 	_units.visible = not units.is_empty()
 	_count_panel.visible = count > 0

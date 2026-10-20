@@ -47,6 +47,9 @@ var _music_player: AudioStreamPlayer
 var _amb_player: AudioStreamPlayer
 var _music_wanted := true
 var _gull_timer := 6.0
+## Music gain factor: 0.45 while the game is paused or the window is in the background.
+var _duck := 1.0
+var _app_focused := true
 var _rng := RandomNumberGenerator.new()
 
 
@@ -113,11 +116,26 @@ func apply_volumes() -> void:
 	var master := AudioServer.get_bus_index("Master")
 	AudioServer.set_bus_volume_db(master, linear_to_db(maxf(Settings.master_volume, 0.0001)))
 	AudioServer.set_bus_mute(master, Settings.muted)
-	AudioServer.set_bus_volume_db(AudioServer.get_bus_index(Settings.BUS_MUSIC), linear_to_db(maxf(Settings.music_volume, 0.0001)))
+	_apply_music_volume()
 	AudioServer.set_bus_volume_db(AudioServer.get_bus_index(Settings.BUS_SFX), linear_to_db(maxf(Settings.sfx_volume, 0.0001)))
 
 
+func _apply_music_volume() -> void:
+	AudioServer.set_bus_volume_db(AudioServer.get_bus_index(Settings.BUS_MUSIC), linear_to_db(maxf(Settings.music_volume * _duck, 0.0001)))
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+		_app_focused = false
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN or what == NOTIFICATION_APPLICATION_RESUMED:
+		_app_focused = true
+
+
 func _process(delta: float) -> void:
+	var duck_goal := 0.45 if GameState.paused or not _app_focused else 1.0
+	if not is_equal_approx(_duck, duck_goal):
+		_duck = move_toward(_duck, duck_goal, delta * 2.5)
+		_apply_music_volume()
 	var t0 := Time.get_ticks_usec()
 	while not _jobs.is_empty():
 		var job: Callable = _jobs.pop_front()
@@ -148,18 +166,6 @@ func play(sound: String, volume_db: float = 0.0, pitch: float = 1.0) -> void:
 	p.volume_db = volume_db
 	p.pitch_scale = pitch
 	p.play()
-
-
-func set_music(on: bool) -> void:
-	_music_wanted = on
-	if not enabled or _music_player == null:
-		return
-	if not on:
-		_music_player.stop()
-
-
-func is_ready() -> bool:
-	return _jobs.is_empty()
 
 
 # ---- synthesis helpers -----------------------------------------------------

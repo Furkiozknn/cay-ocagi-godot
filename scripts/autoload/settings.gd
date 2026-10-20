@@ -9,13 +9,16 @@ const BUS_MUSIC := "Music"
 const BUS_SFX := "SFX"
 
 var lang := "tr"
-var master_volume := 0.9
-var music_volume := 0.55
-var sfx_volume := 0.9
+var master_volume := 0.8
+var music_volume := 0.6
+var sfx_volume := 0.8
 var muted := false
 ## "low" disables shadows and halves the particles; "high" is the default.
 var quality := "high"
 var fullscreen := false
+
+## Volume a channel had before M / X turned it off, so the same key brings it back.
+var _vol_prev := {"music": 0.6, "sfx": 0.8}
 
 
 func _ready() -> void:
@@ -101,6 +104,28 @@ func set_volume(bus: String, v: float) -> void:
 			sfx_volume = v
 	save()
 	changed.emit()
+
+
+func volume(bus: String) -> float:
+	match bus:
+		"master":
+			return master_volume
+		"music":
+			return music_volume
+		"sfx":
+			return sfx_volume
+	return 0.0
+
+
+## M (music) and X (effects): switches one channel off, or back to the volume it had. Returns true when on.
+func toggle_volume(bus: String) -> bool:
+	var v := volume(bus)
+	if v > 0.0:
+		_vol_prev[bus] = v
+		set_volume(bus, 0.0)
+		return false
+	set_volume(bus, float(_vol_prev.get(bus, 0.6)))
+	return true
 
 
 func set_muted(m: bool) -> void:

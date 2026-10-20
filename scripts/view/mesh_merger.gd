@@ -137,6 +137,58 @@ func cone(x: float, y: float, z: float, r: float, h: float, color: int, seg: int
 	_add(prim, _xf(Vector3(x, y + h / 2.0, z), Vector3(r, h, r * depth), ry, rx, rz), Color.hex(color * 256 + 255), -1.0)
 
 
+## Surface of revolution around the y axis through (x, y, z); `profile` is a list of (radius, height) points.
+func lathe(x: float, y: float, z: float, profile: Array[Vector2], color: int, seg: int = 10) -> void:
+	var f := 1.0 + (_rng.randf() - 0.5) * 2.0 * jitter
+	var base := Color.hex(color * 256 + 255)
+	var col := Color(base.r * f, base.g * f, base.b * f, 1.0)
+	var o := Vector3(x, y, z)
+	for i in profile.size() - 1:
+		for k in seg:
+			var a0 := TAU * k / seg
+			var a1 := TAU * (k + 1) / seg
+			var p00 := o + Vector3(cos(a0) * profile[i].x, profile[i].y, sin(a0) * profile[i].x)
+			var p01 := o + Vector3(cos(a1) * profile[i].x, profile[i].y, sin(a1) * profile[i].x)
+			var p10 := o + Vector3(cos(a0) * profile[i + 1].x, profile[i + 1].y, sin(a0) * profile[i + 1].x)
+			var p11 := o + Vector3(cos(a1) * profile[i + 1].x, profile[i + 1].y, sin(a1) * profile[i + 1].x)
+			# outward = the profile segment's normal (dy, -dr) turned to this angle
+			var d := profile[i + 1] - profile[i]
+			var out := Vector3(cos((a0 + a1) * 0.5), 0.0, sin((a0 + a1) * 0.5)) * d.y + Vector3.UP * -d.x
+			_add_tri(p00, p10, p11, out, col)
+			_add_tri(p00, p11, p01, out, col)
+
+
+## Ring lying flat, centred at (x, y, z).
+func torus(x: float, y: float, z: float, ring_r: float, tube_r: float, color: int, seg: int = 12, sides: int = 6) -> void:
+	var prim := _primitive("torus%d_%d_%d" % [roundi(ring_r * 1000.0), roundi(tube_r * 1000.0), seg], func() -> Mesh:
+		var m := TorusMesh.new()
+		m.inner_radius = ring_r - tube_r
+		m.outer_radius = ring_r + tube_r
+		m.rings = seg
+		m.ring_segments = sides
+		return m)
+	_add(prim, Transform3D(Basis.IDENTITY, Vector3(x, y, z)), Color.hex(color * 256 + 255), 0.0)
+
+
+## One flat triangle; the winding is fixed so its front side faces `outward` (Godot culls clockwise-back faces).
+func _add_tri(a: Vector3, b: Vector3, c: Vector3, outward: Vector3, col: Color) -> void:
+	var n := (b - a).cross(c - a)
+	if n.length_squared() < 1e-12:
+		return
+	if n.dot(outward) > 0.0:
+		var t := b
+		b = c
+		c = t
+		n = -n
+	n = -n.normalized()
+	_verts.append(a)
+	_verts.append(b)
+	_verts.append(c)
+	for i in 3:
+		_normals.append(n)
+		_colors.append(col)
+
+
 ## Flat horizontal quad (top faces up).
 func quad(x0: float, z0: float, x1: float, z1: float, y: float, color: int, jit: float = 0.05) -> void:
 	var f := 1.0 + (_rng.randf() - 0.5) * 2.0 * jit

@@ -1,10 +1,29 @@
 class_name Screens
 extends CanvasLayer
-## Full-screen cards: title, day intro, pause, settings, day summary, shop, game over, victory.
+## Full-screen cards: title, new-game confirm, day intro, pause, settings, day summary, shop, game over, victory.
+## Every card works with the keyboard / gamepad: its first button takes the focus when it opens.
 
 const CARD_WIDTH := 620.0
+## Dimmed, blurred backdrop behind the cards (a 13-tap blur of what is drawn below: the 3D view and the HUD).
+const BACKDROP_SHADER := """
+shader_type canvas_item;
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
+uniform vec4 tint : source_color = vec4(0.27, 0.12, 0.04, 0.22);
+uniform float radius = 5.0;
+void fragment() {
+	vec2 px = SCREEN_PIXEL_SIZE * radius;
+	vec3 c = texture(screen_tex, SCREEN_UV).rgb * 0.2;
+	for (int i = 0; i < 12; i++) {
+		float a = float(i) * 0.5236;
+		float r = (i % 2 == 0) ? 1.0 : 0.55;
+		c += texture(screen_tex, SCREEN_UV + vec2(cos(a), sin(a)) * px * r).rgb * (0.8 / 12.0);
+	}
+	COLOR = vec4(mix(c, tint.rgb, tint.a), 1.0);
+}
+"""
 
 var _dim: ColorRect
+var _dim_mat: ShaderMaterial
 var _center: CenterContainer
 var _card: PanelContainer
 var _scroll: ScrollContainer
@@ -14,12 +33,19 @@ var _current := ""
 var _settings_return := "title"
 var _tween: Tween = null
 var _fit_pending := false
+var _focus_first: Control = null
+## The upgrade whose buy button keeps the focus after the shop card is rebuilt.
+var _shop_focus := ""
 
 
 func _ready() -> void:
 	layer = 10
 	_dim = ColorRect.new()
 	_dim.color = Color(0.27, 0.12, 0.04, 0.34)
+	var sh := Shader.new()
+	sh.code = BACKDROP_SHADER
+	_dim_mat = ShaderMaterial.new()
+	_dim_mat.shader = sh
 	_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_dim)
@@ -66,6 +92,18 @@ func close_settings() -> void:
 		show_screen("title")
 
 
+## Esc / P: closes a panel shown on top of a screen (settings, new-game confirm). Returns false if there is none.
+func close_panel() -> bool:
+	match _current:
+		"settings":
+			close_settings()
+			return true
+		"confirm":
+			show_screen("title")
+			return true
+	return false
+
+
 func is_open() -> bool:
 	return _center.visible
 
@@ -100,6 +138,7 @@ func _rebuild() -> void:
 
 func show_screen(screen_name: String, animate: bool = true) -> void:
 	_current = screen_name
+	_focus_first = null
 	for c in _body.get_children():
 		_body.remove_child(c)
 		c.queue_free()
@@ -107,6 +146,8 @@ func show_screen(screen_name: String, animate: bool = true) -> void:
 	match screen_name:
 		"title":
 			_build_title()
+		"confirm":
+			_build_confirm()
 		"intro":
 			_build_intro()
 		"pause":
@@ -120,10 +161,13 @@ func show_screen(screen_name: String, animate: bool = true) -> void:
 		"gameover":
 			_build_gameover()
 		"victory":
-			_build_victory()
+			_build_victory(animate)
 	_dim.visible = true
 	_center.visible = true
-	_dim.color.a = 0.08 if screen_name == "title" else 0.22
+	# the title keeps the live demo day sharp behind it; every other card blurs the frozen game
+	var on_title := screen_name == "title" or screen_name == "confirm" or (screen_name == "settings" and _settings_return == "title")
+	_dim.material = null if on_title else _dim_mat
+	_dim.color = Color(0.27, 0.12, 0.04, 0.08)
 	_request_fit()
 	if animate:
 		if _tween:
@@ -138,6 +182,12 @@ func show_screen(screen_name: String, animate: bool = true) -> void:
 	else:
 		_card.modulate.a = 1.0
 		_card.scale = Vector2.ONE
+	_grab_focus.call_deferred()
+
+
+func _grab_focus() -> void:
+	if _focus_first != null and is_instance_valid(_focus_first) and _focus_first.is_visible_in_tree():
+		_focus_first.grab_focus()
 
 
 func _request_fit() -> void:
@@ -211,8 +261,33 @@ func _buttons(defs: Array) -> HFlowContainer:
 			Sfx.play("click")
 			(d["action"] as Callable).call())
 		flow.add_child(b)
+		if _focus_first == null:
+			_focus_first = b
 	_body.add_child(flow)
 	return flow
+
+
+## "New record!" chip on the summary, game over and victory cards.
+func _record_badge() -> void:
+	if not GameState.new_record:
+		return
+	var c := CenterContainer.new()
+	var pc := PanelContainer.new()
+	var sb := UiKit.box(Color("f2b632"), 16, Palette.UI_AMBER_DARK, 2)
+	sb.content_margin_top = 3
+	sb.content_margin_bottom = 3
+	pc.add_theme_stylebox_override("panel", sb)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 6)
+	h.add_child(Icon.make("star", 20.0))
+	h.add_child(UiKit.label(Loc.t("newRecord"), 15, Palette.UI_AMBER_DARK))
+	pc.add_child(h)
+	c.add_child(pc)
+	_body.add_child(c)
+
+
+func _menu_button() -> void:
+	_buttons([{"text": Loc.t("menu"), "kind": "alt", "size": 15, "action": func() -> void: GameState.to_menu()}])
 
 
 func _stars_row(n: int) -> void:
@@ -265,12 +340,28 @@ func _howto(num: int, text: String) -> void:
 
 # ---- screens ---------------------------------------------------------------
 
+## The generated crest (128 px, 96 px in portrait).
+func _logo(px: float) -> void:
+	var c := CenterContainer.new()
+	var tr := TextureRect.new()
+	tr.texture = Icons.logo_texture()
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	tr.custom_minimum_size = Vector2(px, px)
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	c.add_child(tr)
+	_body.add_child(c)
+
+
 func _build_title() -> void:
-	_icon_center("tea", 54.0)
+	var vp := get_viewport().get_visible_rect().size
+	if Icons.logo_texture() != null:
+		# 128 px (112 in a short window so the whole card fits), 96 px on a phone
+		_logo(96.0 if vp.x < vp.y else (112.0 if vp.y < 760.0 else 128.0))
+	else:
+		_icon_center("tea", 54.0)
 	_title(Loc.t("title"), 48, Palette.UI_AMBER)
-	var sub := UiKit.label("Tea House Rush", 15, Palette.UI_INK_SOFT)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_body.add_child(sub)
 	_text(Loc.t("tagline"))
 	_howto(1, Loc.t("how1"))
 	_howto(2, Loc.t("how2"))
@@ -281,13 +372,25 @@ func _build_title() -> void:
 	var defs: Array = []
 	if GameState.has_save():
 		defs.append({"text": Loc.t("continue"), "action": func() -> void: GameState.continue_game()})
-		defs.append({"text": Loc.t("play"), "kind": "alt", "action": func() -> void: GameState.start_new()})
+		defs.append({"text": Loc.t("newGame"), "kind": "alt", "action": func() -> void: show_screen("confirm")})
 	else:
 		defs.append({"text": Loc.t("play"), "action": func() -> void: GameState.start_new()})
 	_buttons(defs)
 	_buttons([
 		{"text": Loc.t("settings"), "kind": "small", "size": 14, "action": func() -> void: open_settings("title")},
 		{"text": Loc.t("langBtn"), "kind": "small", "size": 14, "action": Settings.toggle_language},
+	])
+	_text(Loc.t("footer", ["Claude Sonnet 5.5"]), 12, Palette.UI_INK_SOFT)
+
+
+## A new game overwrites the saved run, so it asks first.
+func _build_confirm() -> void:
+	_title(Loc.t("newGame"), 34, Palette.UI_AMBER)
+	_text(Loc.t("newGameWarn"))
+	_spacer(4)
+	_buttons([
+		{"text": Loc.t("yes"), "action": func() -> void: GameState.start_new()},
+		{"text": Loc.t("back"), "kind": "alt", "action": func() -> void: show_screen("title")},
 	])
 
 
@@ -334,6 +437,7 @@ func _build_intro() -> void:
 	_body.add_child(mc)
 	_text(Loc.t("tip%d" % (((day - 1) % 5) + 1)), 14, Palette.UI_INK_SOFT)
 	_buttons([{"text": Loc.t("startDay"), "action": func() -> void: GameState.begin_day()}])
+	_menu_button()
 
 
 func _build_pause() -> void:
@@ -342,6 +446,7 @@ func _build_pause() -> void:
 	_spacer(6)
 	_buttons([
 		{"text": Loc.t("resume"), "action": func() -> void: GameState.toggle_pause()},
+		{"text": Loc.t("restart"), "kind": "alt", "action": func() -> void: GameState.restart_day()},
 		{"text": Loc.t("settings"), "kind": "alt", "action": func() -> void: open_settings("pause")},
 		{"text": Loc.t("menu"), "kind": "alt", "action": func() -> void:
 			GameState.set_paused(false)
@@ -382,7 +487,8 @@ func _slider_row(text: String, value: float, key: String) -> void:
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	s.custom_minimum_size = Vector2(120, 24)
-	s.focus_mode = Control.FOCUS_NONE
+	s.focus_mode = Control.FOCUS_ALL
+	s.add_theme_stylebox_override("focus", UiKit.focus_box(8))
 	s.add_theme_stylebox_override("slider", UiKit.box(Color(0.31, 0.16, 0.04, 0.2), 4))
 	s.add_theme_stylebox_override("grabber_area", UiKit.box(Palette.UI_AMBER, 4))
 	s.add_theme_stylebox_override("grabber_area_highlight", UiKit.box(Palette.UI_AMBER_LIGHT, 4))
@@ -394,6 +500,13 @@ func _slider_row(text: String, value: float, key: String) -> void:
 	pct.custom_minimum_size.x = 44
 	pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	h.add_child(pct)
+	if _focus_first == null:
+		_focus_first = s
+	var row_sb := UiKit.box(Color(1, 1, 1, 0.55), 10)
+	row_sb.border_color = Color("f2b632")
+	pc.add_theme_stylebox_override("panel", row_sb)
+	s.focus_entered.connect(func() -> void: row_sb.set_border_width_all(3))
+	s.focus_exited.connect(func() -> void: row_sb.set_border_width_all(0))
 	s.value_changed.connect(func(v: float) -> void:
 		pct.text = "%d%%" % roundi(v * 100.0)
 		Settings.set_volume(key, v))
@@ -451,6 +564,7 @@ func _build_summary() -> void:
 	_stars_row(int(r.get("stars", 0)))
 	var stars := int(r.get("stars", 0))
 	_text(Loc.t("stars3") if stars == 3 else (Loc.t("stars2") if stars == 2 else Loc.t("stars1")), 18, Palette.UI_INK)
+	_record_badge()
 	_row(Loc.t("earned"), "%d / %d" % [r.get("coins", 0), r.get("target", 0)], "coin")
 	_row(Loc.t("tips"), str(r.get("tips", 0)), "coin")
 	_row(Loc.t("happyC"), str(r.get("happy", 0)), "happy")
@@ -458,6 +572,7 @@ func _build_summary() -> void:
 	_row(Loc.t("wallet"), str(GameState.coins), "coin")
 	var win := GameState.day == GameData.balance().win_day and not GameState.won
 	_buttons([{"text": Loc.t("cont") if win else Loc.t("toShop"), "action": func() -> void: GameState.after_summary()}])
+	_menu_button()
 
 
 func _build_shop() -> void:
@@ -479,8 +594,10 @@ func _build_shop() -> void:
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for id in GameData.UPGRADE_IDS:
 		grid.add_child(_upgrade_card(id))
+	_shop_focus = ""
 	_body.add_child(grid)
-	_buttons([{"text": Loc.t("nextDay"), "action": func() -> void: GameState.next_day()}])
+	_buttons([{"text": Loc.t("retry") if GameState.retrying else Loc.t("nextDay"), "action": func() -> void: GameState.next_day()}])
+	_menu_button()
 
 
 func _upgrade_card(id: String) -> Control:
@@ -536,7 +653,10 @@ func _upgrade_card(id: String) -> Control:
 		b.disabled = not can
 		b.pressed.connect(func() -> void:
 			if GameState.buy(id):
+				_shop_focus = id
 				show_screen("shop", false))
+		if id == _shop_focus and can:
+			_focus_first = b
 	b.add_child(bh)
 	h.add_child(b)
 	pc.add_child(h)
@@ -548,30 +668,39 @@ func _build_gameover() -> void:
 	_title(Loc.t("gameover"), 38, Palette.UI_BAD)
 	_icon_center("angry", 64.0)
 	_text(Loc.t("goTxt"))
+	_record_badge()
 	_row(Loc.t("earned"), "%d / %d" % [r.get("coins", 0), r.get("target", 0)], "coin")
+	_row(Loc.t("happyC"), str(r.get("happy", 0)), "happy")
+	_row(Loc.t("angryC"), str(r.get("angry", 0)), "angry")
 	_row(Loc.t("reached"), str(maxi(GameState.day - 1, 0)), "star")
+	_row(Loc.t("wallet"), str(GameState.coins), "coin")
 	_buttons([
-		{"text": Loc.t("retry"), "action": func() -> void: GameState.retry_day()},
+		{"text": Loc.t("retryShop"), "action": func() -> void: GameState.retry_via_shop()},
 		{"text": Loc.t("menu"), "kind": "alt", "action": func() -> void: GameState.to_menu()},
 	])
 
 
-func _build_victory() -> void:
+func _build_victory(animate: bool = true) -> void:
 	_title(Loc.t("victory"), 42, Palette.UI_AMBER)
 	var stars := 0
+	var cleared := 0
 	for r in GameState.day_log:
 		stars += int(r.get("stars", 0))
-	var days_played := maxi(GameState.day_log.size(), 1)
+		cleared += 1 if r.get("passed", true) else 0
+	# a failed day stays in the log next to its retry; count every cleared day once
+	var days_played := maxi(cleared, 1)
 	var ratio := float(stars) / (days_played * 3.0)
 	_stars_row(3 if ratio >= 0.8 else (2 if ratio >= 0.55 else 1))
 	_text(Loc.t("victoryTxt"))
+	_record_badge()
 	_row(Loc.t("total"), str(GameState.total_earned), "coin")
 	_row(Loc.t("ratingStars"), "%d / %d" % [stars, days_played * 3], "star")
 	_buttons([
 		{"text": Loc.t("endless"), "action": func() -> void: GameState.go_endless()},
 		{"text": Loc.t("menu"), "kind": "alt", "action": func() -> void: GameState.to_menu()},
 	])
-	_launch_confetti()
+	if animate:
+		_launch_confetti()
 
 
 func _launch_confetti() -> void:

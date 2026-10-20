@@ -66,7 +66,9 @@ static func mosque(k: MeshMerger, x: float, z: float, s: float) -> void:
 
 
 ## Everything that never changes (one big mesh) plus the ground (a second mesh).
-static func build_static() -> Dictionary:
+## `skip` lists the parts that come from a generated model instead (semaver, oven, coffee, ayran, sink, window,
+## ground), like the browser's buildWorld(skip).
+static func build_static(skip: Dictionary = {}) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 2024
 	var k := MeshMerger.new(11)
@@ -74,10 +76,11 @@ static func build_static() -> Dictionary:
 	# ground: cobblestone offset rows
 	gd.quad(-200, -9.3, 200, 200, 0.0, 0x8c7a66, 0.0)
 	var tones: Array[int] = [0xc9b79a, 0xbfae92, 0xd2c1a3, 0xb7a68b, 0xc4b296]
-	for x in range(-14, 17):
-		for z in range(-9, 14):
-			var o := 0.45 if (z & 1) == 1 else 0.0
-			gd.quad(x + o + 0.04, z + 0.04, x + o + 0.96, z + 0.96, 0.015, tones[rng.randi() % tones.size()], 0.06)
+	if not skip.has("ground"):
+		for x in range(-14, 17):
+			for z in range(-9, 14):
+				var o := 0.45 if (z & 1) == 1 else 0.0
+				gd.quad(x + o + 0.04, z + 0.04, x + o + 0.96, z + 0.96, 0.015, tones[rng.randi() % tones.size()], 0.06)
 	# quay
 	k.box(0, -0.32, -9.55, 90, 0.9, 0.7, Palette.STONE, 0.0, 0.0, 0.0, 0.02)
 	k.box(0, 0.55, -9.55, 90, 0.08, 0.8, Palette.STONE_D, 0.0, 0.0, 0.0, 0.02)
@@ -96,17 +99,18 @@ static func build_static() -> Dictionary:
 	k.box(-8.3, 4.35, -1, 0.14, 0.16, 15.4, Palette.WALL_D)
 	k.box(-8.3, 5.45, -1, 0.12, 0.12, 15.4, Palette.WALL_D)
 	var z := -7.0
-	while z <= 6.01:
-		k.box(-8.21, 5.45, z, 0.1, 0.72, 1.3, Palette.DARK)
-		k.box(-8.2, 5.4, z, 0.08, 0.08, 1.45, Palette.CREAM)
-		k.box(-8.2, 6.12, z, 0.08, 0.08, 1.45, Palette.CREAM)
-		k.box(-8.18, 5.45, z - 0.84, 0.1, 0.7, 0.3, Palette.TEAL)
-		k.box(-8.18, 5.45, z + 0.84, 0.1, 0.7, 0.3, Palette.TEAL)
-		k.box(-8.0, 5.25, z, 0.3, 0.22, 1.5, Palette.WOOD)
-		for i in range(-2, 3):
-			k.sph(-7.95, 5.55, z + i * 0.27, 0.13, Palette.GREEN, 1.0, 0.8, 1.0, 6, 4)
-			k.sph(-7.93, 5.64, z + i * 0.27, 0.075, 0xe23b4a if i % 2 != 0 else 0xf06a8a, 1.0, 1.0, 1.0, 6, 4)
-		z += 3.25
+	if not skip.has("window"):
+		while z <= 6.01:
+			k.box(-8.21, 5.45, z, 0.1, 0.72, 1.3, Palette.DARK)
+			k.box(-8.2, 5.4, z, 0.08, 0.08, 1.45, Palette.CREAM)
+			k.box(-8.2, 6.12, z, 0.08, 0.08, 1.45, Palette.CREAM)
+			k.box(-8.18, 5.45, z - 0.84, 0.1, 0.7, 0.3, Palette.TEAL)
+			k.box(-8.18, 5.45, z + 0.84, 0.1, 0.7, 0.3, Palette.TEAL)
+			k.box(-8.0, 5.25, z, 0.3, 0.22, 1.5, Palette.WOOD)
+			for i in range(-2, 3):
+				k.sph(-7.95, 5.55, z + i * 0.27, 0.13, Palette.GREEN, 1.0, 0.8, 1.0, 6, 4)
+				k.sph(-7.93, 5.64, z + i * 0.27, 0.075, 0xe23b4a if i % 2 != 0 else 0xf06a8a, 1.0, 1.0, 1.0, 6, 4)
+			z += 3.25
 	# door + step
 	k.box(-8.15, 0.3, -7.6, 0.12, 2.4, 1.2, Palette.TEAL_D)
 	k.box(-8.12, 0.3, -7.6, 0.08, 2.55, 1.45, Palette.CREAM, 0.0, 0.0, 0.0, 0.0)
@@ -150,10 +154,31 @@ static func build_static() -> Dictionary:
 		i += 1
 	k.box(-5.9, 0, -6.45, 0.1, 3.95, 0.1, Palette.CREAM)
 	k.box(-5.9, 0, 6.3, 0.1, 3.95, 0.1, Palette.CREAM)
-	semaver(k, -5.05)
+	if not skip.has("semaver"):
+		semaver(k, -5.05)
 	# simit oven
 	var zc: float = TeaSim.STATION_Z["simit"]
 	var x := CNT_X
+	if not skip.has("oven"):
+		_oven(k, x, zc)
+	zc = TeaSim.STATION_Z["coffee"]
+	if not skip.has("coffee"):
+		_coffee(k, x, zc)
+	zc = TeaSim.STATION_Z["ayran"]
+	if not skip.has("ayran"):
+		_ayran(k, x, zc)
+	zc = TeaSim.STATION_Z["sink"]
+	if not skip.has("sink"):
+		_sink(k, x, zc)
+	_quay_props(k)
+	_far_shore(k, rng)
+	var second := MeshMerger.new(17)
+	if not skip.has("semaver"):
+		semaver(second, -3.85)
+	return {"world": k.build(), "ground": gd.build(), "semaver2": second.build()}
+
+
+static func _oven(k: MeshMerger, x: float, zc: float) -> void:
 	k.box(x, 1.12, zc, 1.55, 0.45, 1.7, Palette.STONE_D)
 	k.box(x, 1.57, zc, 1.5, 1.15, 1.65, 0xa0673a)
 	k.box(x, 2.72, zc, 1.62, 0.12, 1.78, Palette.ROOF)
@@ -163,8 +188,9 @@ static func build_static() -> Dictionary:
 	k.box(x + 0.78, 1.68, zc - 0.62, 0.06, 1.0, 0.12, Palette.CREAM)
 	k.box(x + 0.78, 1.68, zc + 0.62, 0.06, 1.0, 0.12, Palette.CREAM)
 	k.box(x + 0.6, 1.4, zc, 0.5, 0.06, 1.5, Palette.WOOD)
-	# coffee station
-	zc = TeaSim.STATION_Z["coffee"]
+
+
+static func _coffee(k: MeshMerger, x: float, zc: float) -> void:
 	k.box(x, 1.12, zc, 1.5, 0.1, 1.9, Palette.DARK)
 	k.box(x, 1.2, zc, 1.34, 0.08, 1.74, Palette.SAND, 0.0, 0.0, 0.0, 0.02)
 	k.box(x - 0.62, 1.12, zc, 0.08, 0.3, 1.9, Palette.WOOD)
@@ -178,8 +204,9 @@ static func build_static() -> Dictionary:
 		k.cyl(x + 0.05, 1.28, zz, 0.09, 0.19, 0.34, 0xc67a3a, 10)
 		k.cyl(x + 0.05, 1.62, zz, 0.13, 0.1, 0.06, 0xc67a3a, 10)
 		k.box(x + 0.38, 1.5, zz, 0.4, 0.05, 0.06, Palette.DARK, 0.0, 0.0, 0.25)
-	# ayran cooler
-	zc = TeaSim.STATION_Z["ayran"]
+
+
+static func _ayran(k: MeshMerger, x: float, zc: float) -> void:
 	k.box(x, 1.12, zc, 1.45, 1.75, 1.55, 0xe2eaef)
 	k.box(x + 0.74, 1.3, zc, 0.06, 1.25, 1.25, 0x89b1c6)
 	k.box(x + 0.76, 2.5, zc, 0.08, 0.3, 1.35, 0x3b6f94)
@@ -189,8 +216,9 @@ static func build_static() -> Dictionary:
 	k.box(x + 0.76, 1.15, zc, 0.08, 0.1, 1.3, Palette.DARK)
 	k.cyl(x - 0.3, 2.87, zc + 0.3, 0.17, 0.13, 0.3, 0xfbfaf4, 8)
 	k.cyl(x - 0.3, 2.87, zc - 0.3, 0.17, 0.13, 0.3, 0xfbfaf4, 8)
-	# sink
-	zc = TeaSim.STATION_Z["sink"]
+
+
+static func _sink(k: MeshMerger, x: float, zc: float) -> void:
 	k.box(x, 1.12, zc, 1.5, 0.5, 1.6, 0x8aa6b4)
 	k.box(x + 0.05, 1.58, zc, 1.15, 0.06, 1.25, 0x5e94b0, 0.0, 0.0, 0.0, 0.0)
 	k.cyl(x - 0.5, 1.62, zc, 0.06, 0.06, 0.85, 0xc9ccd0, 8)
@@ -198,6 +226,9 @@ static func build_static() -> Dictionary:
 	k.box(x - 0.6, 1.62, zc + 0.74, 0.4, 0.06, 0.5, 0xa0b0b8)
 	for j in 4:
 		k.cyl(x - 0.62 + (j % 2) * 0.2, 1.68 + (0.24 if j > 1 else 0.0), zc + 0.66 + (j % 2) * 0.1, 0.09, 0.07, 0.22, 0xcfd6d4, 6)
+
+
+static func _quay_props(k: MeshMerger) -> void:
 	# lamp posts + bunting
 	for lp in [Vector2(6.0, -8.7), Vector2(-3.6, -8.7)]:
 		k.cyl(lp.x, 0, lp.y, 0.26, 0.32, 0.4, Palette.TEAL_D, 8)
@@ -214,6 +245,9 @@ static func build_static() -> Dictionary:
 	k.box(10.0, 0, -8.6, 0.9, 0.6, 0.8, Palette.WOOD_L)
 	k.box(10.1, 0.6, -8.55, 0.8, 0.5, 0.7, Palette.WOOD)
 	k.box(11.2, 0, -8.6, 0.8, 0.5, 0.8, Palette.WOOD_L)
+
+
+static func _far_shore(k: MeshMerger, rng: RandomNumberGenerator) -> void:
 	# sailboats, far shore, hills
 	sailboat(k, 1.5, -17.5, 1.0, Palette.RED)
 	sailboat(k, -7.5, -23.0, 1.2, Palette.TEAL)
@@ -230,9 +264,6 @@ static func build_static() -> Dictionary:
 		k.box(hx - 6, h, hzz + 3, 1.8, 0.16, 1.7, 0xa9795f, 0.0, 0.0, 0.0, 0.02)
 	k.sph(-4, -2, -42, 20, 0xb6aebe, 1.0, 0.32, 0.5, 12, 6)
 	k.sph(24, -2, -46, 22, 0xbfb2bf, 1.0, 0.3, 0.5, 12, 6)
-	var second := MeshMerger.new(17)
-	semaver(second, -3.85)
-	return {"world": k.build(), "ground": gd.build(), "semaver2": second.build()}
 
 
 # ---- characters and animals ------------------------------------------------

@@ -1,13 +1,47 @@
 class_name Icons
 extends RefCounted
-## Vector icons drawn with CanvasItem draw calls in a 24x24 design space.
+## Icons: the generated PNGs in res://assets/ui/icons (shared with the browser version) where one exists,
+## otherwise vector shapes drawn with CanvasItem calls in a 24x24 design space (pause, play, sound, gear, check, ...).
 
 const BROWN := Color("7c2d12")
+const ICON_DIR := "res://assets/ui/icons/%s.png"
+const LOGO_PATH := "res://assets/ui/logo.png"
+
+## kind -> Texture2D, or null when there is no PNG for it (cached, so each file is looked up once).
+static var _tex: Dictionary = {}
+static var _logo: Texture2D = null
+static var _logo_checked := false
+## Tests and the --noassets flag switch the PNGs off to check the vector fallback.
+static var use_png := not OS.get_cmdline_user_args().has("--noassets")
+
+
+static func texture(kind: String) -> Texture2D:
+	if not use_png:
+		return null
+	var file := "star" if kind == "starOff" else kind
+	if not _tex.has(file):
+		var path := ICON_DIR % file
+		_tex[file] = load(path) as Texture2D if ResourceLoader.exists(path) else null
+	return _tex[file]
+
+
+static func logo_texture() -> Texture2D:
+	if not _logo_checked:
+		_logo_checked = true
+		if use_png and ResourceLoader.exists(LOGO_PATH):
+			_logo = load(LOGO_PATH) as Texture2D
+	return _logo
 
 
 static func draw_at(ci: CanvasItem, kind: String, rect: Rect2, tint: Color = Palette.UI_INK) -> void:
 	var s := minf(rect.size.x, rect.size.y)
 	var off := rect.position + (rect.size - Vector2(s, s)) * 0.5
+	var tex := texture(kind)
+	if tex != null:
+		# the empty star is the gold star, greyed out
+		var mod := Color(0.55, 0.55, 0.55, 0.3) if kind == "starOff" else Color.WHITE
+		ci.draw_texture_rect(tex, Rect2(off, Vector2(s, s)), false, mod)
+		return
 	ci.draw_set_transform(off, 0.0, Vector2(s / 24.0, s / 24.0))
 	_draw_kind(ci, kind, tint)
 	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

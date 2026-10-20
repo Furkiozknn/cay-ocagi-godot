@@ -19,6 +19,11 @@ var _logo: Control
 var _day_label: Label
 var _clock_bar: ProgressBar
 var _clock_label: Label
+var _clock_fill: StyleBoxFlat
+var _clock_fill_late: StyleBoxFlat
+var _late_shown := false
+var _coin_chip: Control
+var _coin_icon: Icon
 var _coin_label: Label
 var _goal_label: Label
 var _goal_bar: ProgressBar
@@ -46,6 +51,7 @@ var _floats: Array[Dictionary] = []
 var _sim: TeaSim = null
 var _last_toast := ""
 var _last_toast_ms := 0
+var _queue_sig := ""
 
 
 func _ready() -> void:
@@ -67,7 +73,7 @@ func _ready() -> void:
 	_build_toasts()
 	_build_bubbles()
 	GameState.sim_created.connect(_on_sim_created)
-	GameState.phase_changed.connect(func(_p: String) -> void: _update_visibility())
+	GameState.phase_changed.connect(_on_phase)
 	GameState.paused_changed.connect(func(_p: bool) -> void: _refresh_buttons())
 	GameState.speed_changed.connect(func(_s: int) -> void: _refresh_buttons())
 	Settings.language_changed.connect(_refresh_texts)
@@ -83,6 +89,12 @@ func _update_visibility() -> void:
 	_root.visible = GameState.phase == "play"
 
 
+func _on_phase(p: String) -> void:
+	_update_visibility()
+	if p == "play" and GameState.day == 1 and not GameState.won:
+		toast(Loc.t("welcome"), "good")
+
+
 # ---- construction ----------------------------------------------------------
 
 func _chip(parent: Control, icon_kind: String, size_px: float = 22.0) -> Label:
@@ -96,9 +108,17 @@ func _chip(parent: Control, icon_kind: String, size_px: float = 22.0) -> Label:
 	return l
 
 
+## Square HUD button. No keyboard focus: every one of them has its own key (F, P, M, L).
+func _hud_button(text: String, w: float) -> Button:
+	var b := UiKit.button(text, "icon", 14)
+	b.focus_mode = Control.FOCUS_NONE
+	var touch := UiKit.is_touch()
+	b.custom_minimum_size = Vector2(maxf(w, UiKit.TOUCH_MIN) if touch else w, UiKit.TOUCH_MIN if touch else 36.0)
+	return b
+
+
 func _icon_button(icon_kind: String) -> Array:
-	var b := UiKit.button("", "icon", 13)
-	b.custom_minimum_size = Vector2(38, 36)
+	var b := _hud_button("", 38.0)
 	var ic := Icon.make(icon_kind, 20.0)
 	ic.custom_minimum_size = Vector2.ZERO
 	ic.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 8)
@@ -134,6 +154,8 @@ func _build_top() -> void:
 	clock.add_theme_constant_override("separation", 6)
 	clock.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_clock_bar = UiKit.bar(Color("f3c14f"), 96.0, 8.0)
+	_clock_fill = _clock_bar.get_theme_stylebox("fill") as StyleBoxFlat
+	_clock_fill_late = UiKit.box(Palette.UI_BAD, 6)
 	clock.add_child(_clock_bar)
 	_clock_label = UiKit.label("3:00", 15)
 	clock.add_child(_clock_label)
@@ -141,7 +163,10 @@ func _build_top() -> void:
 	var coins := HBoxContainer.new()
 	coins.add_theme_constant_override("separation", 6)
 	coins.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	coins.add_child(Icon.make("coin", 22.0))
+	_coin_icon = Icon.make("coin", 22.0)
+	_coin_icon.pivot_offset = Vector2(11, 11)
+	coins.add_child(_coin_icon)
+	_coin_chip = coins
 	_coin_label = UiKit.label("0", 15)
 	coins.add_child(_coin_label)
 	_goal_label = UiKit.label("/ 0", 12, Palette.UI_INK_SOFT)
@@ -160,8 +185,7 @@ func _build_top() -> void:
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", 6)
 	btns.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_speed_btn = UiKit.button("1×", "icon", 14)
-	_speed_btn.custom_minimum_size = Vector2(44, 36)
+	_speed_btn = _hud_button("1×", 44.0)
 	_speed_btn.pressed.connect(GameState.toggle_speed)
 	btns.add_child(_speed_btn)
 	var pb := _icon_button("pause")
@@ -177,8 +201,7 @@ func _build_top() -> void:
 	var gb := _icon_button("gear")
 	gb[0].pressed.connect(func() -> void: settings_requested.emit())
 	btns.add_child(gb[0])
-	_lang_btn = UiKit.button("EN", "icon", 14)
-	_lang_btn.custom_minimum_size = Vector2(44, 36)
+	_lang_btn = _hud_button("EN", 44.0)
 	_lang_btn.pressed.connect(Settings.toggle_language)
 	btns.add_child(_lang_btn)
 	flow.add_child(btns)
@@ -214,7 +237,7 @@ func _build_dock() -> void:
 	th.add_child(slots)
 	for i in 5:
 		var slot := PanelContainer.new()
-		slot.custom_minimum_size = Vector2(40, 40)
+		slot.custom_minimum_size = Vector2(UiKit.TOUCH_MIN, UiKit.TOUCH_MIN) if UiKit.is_touch() else Vector2(40, 40)
 		slot.mouse_filter = Control.MOUSE_FILTER_STOP
 		var ic := Icon.make("tea", 28.0)
 		ic.visible = false
@@ -231,6 +254,7 @@ func _build_dock() -> void:
 	_queue_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	th.add_child(_queue_box)
 	_clear_btn = UiKit.button("", "mini", 11)
+	_clear_btn.focus_mode = Control.FOCUS_NONE
 	_clear_btn.pressed.connect(func() -> void:
 		if GameState.sim != null:
 			GameState.sim.clear_queue())
@@ -285,14 +309,18 @@ func _on_sim_created(s: TeaSim) -> void:
 	if _sim != null and _sim.toast.is_connected(_on_toast):
 		_sim.toast.disconnect(_on_toast)
 		_sim.floating.disconnect(_on_float)
+		_sim.paid.disconnect(_on_paid)
 	_sim = s
 	_sim.toast.connect(_on_toast)
 	_sim.floating.connect(_on_float)
+	_sim.paid.connect(_on_paid)
+	_queue_sig = ""
 	for b in _bubbles:
 		b.clear()
 	for d in _dirty_bubbles:
 		d.clear()
 	_queue_n = -1
+	_set_late(false)
 	for f in _floats:
 		(f["node"] as Node).queue_free()
 	_floats.clear()
@@ -315,7 +343,7 @@ func _on_table_pressed(i: int) -> void:
 
 func _on_slot_input(event: InputEvent, index: int) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if GameState.sim != null and GameState.phase == "play":
+		if GameState.sim != null and GameState.phase == "play" and not GameState.paused:
 			GameState.sim.drop_tray(index)
 
 
@@ -339,6 +367,38 @@ func _on_float(pos: Vector3, text: String, tone: String) -> void:
 	l.pivot_offset = Vector2(20, 12)
 	_float_layer.add_child(l)
 	_floats.append({"node": l, "pos": pos, "age": 0.0})
+
+
+## A few coins fly from the paying table to the coin counter, which then bumps (1-4 coins, 0.7 s).
+func _on_paid(pos: Vector3, amount: int) -> void:
+	if GameState.phase != "play" or world == null or world.is_behind(pos) or not _coin_icon.is_visible_in_tree():
+		return
+	var from := world.to_screen(pos) - _float_layer.global_position
+	var to := _coin_icon.global_position - _float_layer.global_position
+	var n := mini(4, 1 + amount / 8)
+	for i in n:
+		var c := Icon.make("coin", 22.0)
+		c.position = from + Vector2(randf_range(-13.0, 13.0), randf_range(-8.0, 8.0)) - Vector2(11, 11)
+		_float_layer.add_child(c)
+		var tw := c.create_tween()
+		tw.tween_interval(0.04 + i * 0.07)
+		tw.tween_property(c, "position", to, 0.7).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(c, "modulate:a", 0.4, 0.7)
+		tw.parallel().tween_property(c, "scale", Vector2(0.8, 0.8), 0.7)
+		tw.tween_callback(c.queue_free)
+	var bump := _coin_icon.create_tween()
+	bump.tween_interval(0.76)
+	bump.tween_property(_coin_icon, "scale", Vector2(1.35, 1.35), 0.09)
+	bump.tween_property(_coin_icon, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Last orders: the clock bar and the time turn red for the final 20 seconds.
+func _set_late(on: bool) -> void:
+	if on == _late_shown:
+		return
+	_late_shown = on
+	_clock_bar.add_theme_stylebox_override("fill", _clock_fill_late if on else _clock_fill)
+	_clock_label.add_theme_color_override("font_color", Palette.UI_BAD if on else Palette.UI_INK)
 
 
 ## Shows a short message under the top bar.
@@ -403,7 +463,9 @@ func _process(_delta: float) -> void:
 	_day_label.text = Loc.t("dayEndless", [GameState.day]) if GameState.endless or GameState.day > GameData.DAY_COUNT else Loc.t("dayOf", [GameState.day])
 	_clock_bar.value = clampf(s.clock / s.day_len, 0.0, 1.0)
 	_clock_label.text = UiKit.fmt_time(s.day_len - s.clock)
-	_coin_label.text = str(GameState.live_coins())
+	_set_late(s.last_call)
+	# today's coins against today's target (the wallet is shown in the shop and the summary)
+	_coin_label.text = str(s.day_coins)
 	_goal_label.text = "/ %d" % s.target
 	_goal_bar.value = clampf(float(s.day_coins) / maxf(s.target, 1.0), 0.0, 1.0)
 	_happy_label.text = str(s.happy)
@@ -429,25 +491,38 @@ func _update_tray(s: TeaSim) -> void:
 			_tray_slots[i].add_theme_stylebox_override("panel", sb)
 		_tray_slots[i].modulate = Color(1, 1, 1, 0.25) if locked else Color.WHITE
 		_tray_icons[i].visible = full
-		if full:
+		if full and _tray_icons[i].kind != s.waiter.tray[i]:
 			_tray_icons[i].kind = s.waiter.tray[i]
-	var q := s.waiter.queue.size() + (1 if not s.waiter.current.is_empty() else 0)
-	if q != _queue_n:
-		_queue_n = q
+	var acts: Array[Dictionary] = []
+	if not s.waiter.current.is_empty():
+		acts.append(s.waiter.current)
+	acts.append_array(s.waiter.queue)
+	var sig := ""
+	for a in acts:
+		sig += "%s%s," % [a["type"], a["id"]]
+	if sig != _queue_sig:
+		_queue_sig = sig
+		_queue_n = acts.size()
 		for c in _queue_box.get_children():
 			c.queue_free()
-		for i in q:
+		for a in acts:
+			# a station shows its icon, a table its number (1-6)
 			var chip := PanelContainer.new()
 			chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			var csb := UiKit.box(Palette.UI_AMBER, 7)
-			csb.content_margin_left = 6
-			csb.content_margin_right = 6
+			chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			var station: bool = a["type"] == "station"
+			var csb := UiKit.box(Color.WHITE if station else Palette.UI_AMBER, 7, Palette.UI_AMBER, 1 if station else 0)
+			csb.content_margin_left = 2 if station else 6
+			csb.content_margin_right = 2 if station else 6
 			csb.content_margin_top = 1
 			csb.content_margin_bottom = 1
 			chip.add_theme_stylebox_override("panel", csb)
-			chip.add_child(UiKit.label(str(i + 1), 12, Color.WHITE))
+			if station:
+				chip.add_child(Icon.make(STATION_ICONS[a["id"]], 16.0))
+			else:
+				chip.add_child(UiKit.label(str(int(a["id"]) + 1), 12, Color.WHITE))
 			_queue_box.add_child(chip)
-		_clear_btn.visible = q > 0
+		_clear_btn.visible = _queue_n > 0
 
 
 func _update_stations(s: TeaSim) -> void:
@@ -464,7 +539,11 @@ func _update_stations(s: TeaSim) -> void:
 				tea_count += k.n
 			_:
 				tea_units.append({"state": "empty", "frac": 0.0})
-	(_stations["tea"] as StationButton).set_info(false, tea_units, tea_count, false)
+	# day 1: the tea station pulses until the first brew starts
+	var tea_btn := _stations["tea"] as StationButton
+	tea_btn.hint = GameState.day == 1 and not GameState.won and s.clock < 40.0 and s.kettles[0].state == "empty" \
+		and s.waiter.queue.is_empty() and s.waiter.current.is_empty()
+	tea_btn.set_info(false, tea_units, tea_count, false)
 	var oven_units: Array[Dictionary] = []
 	match s.oven.state:
 		"baking":
@@ -500,6 +579,11 @@ func _update_stations(s: TeaSim) -> void:
 
 
 func _update_bubbles(s: TeaSim) -> void:
+	# a party that left angry is no longer the table's party: its bubble stays up while the anger flash lasts
+	var angry_at: Array[bool] = [false, false, false, false, false, false]
+	for p in s.parties:
+		if p.state == "leave" and p.persons[0].mood < 0 and p.persons[0].flash > 0.35:
+			angry_at[p.table] = true
 	for tb in s.tables:
 		var bub := _bubbles[tb.index]
 		var dirty_bub := _dirty_bubbles[tb.index]
@@ -508,8 +592,12 @@ func _update_bubbles(s: TeaSim) -> void:
 			dirty_bub.clear()
 			continue
 		var p := tb.party
-		if p == null:
+		if p == null and angry_at[tb.index]:
+			bub.show_mini("angry")
+			_place(bub, Vector3(tb.pos.x, 2.55, tb.pos.y))
+		elif p == null:
 			bub.clear()
+		if p == null:
 			if tb.dirty:
 				dirty_bub.show_mini("dirty")
 				_place(dirty_bub, Vector3(tb.pos.x, 1.7 + 0.1 * sin(Time.get_ticks_msec() / 160.0), tb.pos.y))
@@ -525,11 +613,6 @@ func _update_bubbles(s: TeaSim) -> void:
 				bub.show_order(avatar, p.order, clampf(p.patience / p.max_patience, 0.0, 1.0))
 			"eat":
 				bub.show_mini("happy")
-			"leave":
-				if p.persons[0].mood < 0 and p.persons[0].flash > 0.35:
-					bub.show_mini("angry")
-				else:
-					bub.clear()
 			_:
 				bub.clear()
 		if bub.visible:

@@ -1,9 +1,11 @@
 class_name WorldView
 extends Node3D
-## The 3D tea house: builds the scenery, then mirrors the simulation (tables, people,
-## waiter, stations) every frame and runs the ambient life (cat, gulls, ferry).
+## The 3D tea house: builds the scenery (procedural, with the generated GLB models where they load), then mirrors
+## the simulation (tables, people, waiter, stations) every frame and runs the ambient life (cat, gulls, ferry).
 
 const CNT_X := TeaSim.CNT_X
+## Counter top: the station models stand on it.
+const TOP := 1.12
 const CAT_HOME := Vector2(-7.55, -7.6)
 const SEA_SHADER := """
 shader_type spatial;
@@ -36,6 +38,19 @@ var _tray_items: Array[MeshInstance3D] = []
 var _apprentice: Node3D
 var _appr_item: MeshInstance3D
 var _semaver2: MeshInstance3D
+var _models: Dictionary = {}
+var _table_mm: MultiMeshInstance3D = null
+var _table_scale := Vector3.ONE
+## Effect anchors on the station props; the generated models move them (browser `FIT`).
+var _tea_steam_y := 3.3
+var _ring_x := CNT_X + 0.05
+var _ring_y := 2.86
+var _smoke_pos := Vector3(CNT_X - 0.45, 3.7, TeaSim.STATION_Z["simit"] - 0.5)
+var _pots: Array[Vector3] = [
+	Vector3(CNT_X + 0.05, 1.66, TeaSim.STATION_Z["coffee"] - 0.45),
+	Vector3(CNT_X + 0.05, 1.66, TeaSim.STATION_Z["coffee"] + 0.45),
+]
+var _pot_steam_dy := 0.24
 var _oven_glow: MeshInstance3D
 var _oven_mat: StandardMaterial3D
 var _rings: Array[MeshInstance3D] = []
@@ -121,6 +136,7 @@ func _setup_environment() -> void:
 
 func apply_quality() -> void:
 	var low := Settings.is_low()
+	fx.apply_quality()
 	sun.shadow_enabled = not low
 	# without a shadow map the unshadowed sun reads darker, so lift it a little
 	sun.light_energy = 0.6 if low else 0.45
@@ -168,14 +184,21 @@ func _mesh_node(mesh: Mesh, parent: Node3D, shadow := true) -> MeshInstance3D:
 
 
 func _build_scenery() -> void:
-	var parts := WorldBuilder.build_static()
+	_models = AssetModels.load_all()
+	var skip := _models.duplicate()
+	var ground_tex := AssetModels.ground_texture()
+	if ground_tex != null:
+		skip["ground"] = true
+	var parts := WorldBuilder.build_static(skip)
 	var w := _mesh_node(parts["world"], scenery)
 	w.name = "Buildings"
 	var g := _mesh_node(parts["ground"], scenery, false)
 	g.name = "Ground"
-	_semaver2 = _mesh_node(parts["semaver2"], scenery)
-	_semaver2.name = "SecondSamovar"
-	_semaver2.visible = false
+	if not _models.has("semaver"):
+		_semaver2 = _mesh_node(parts["semaver2"], scenery)
+		_semaver2.name = "SecondSamovar"
+		_semaver2.visible = false
+	_place_models(ground_tex)
 	# sea
 	var sea := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
@@ -212,13 +235,108 @@ func _build_scenery() -> void:
 		scenery.add_child(lm)
 
 
+func _model_node(model_name: String, sc: Vector3, pos: Vector3, parent: Node3D = null, shadow := true) -> MeshInstance3D:
+	var m: AssetModels.Model = _models[model_name]
+	var n := _mesh_node(m.mesh, scenery if parent == null else parent, shadow)
+	n.name = model_name.capitalize()
+	n.scale = sc
+	n.position = pos
+	return n
+
+
+## Places the generated models with the browser's transforms (review §5.3) and moves the effect anchors onto them.
+func _place_models(ground_tex: Texture2D) -> void:
+	if _models.has("semaver"):
+		var m: AssetModels.Model = _models["semaver"]
+		var sc := 2.0 / m.size.y
+		# the brass texture is a little dull under the warm light (browser: colour x1.2 in linear light)
+		m.material.albedo_color = Color(1.08, 1.08, 1.08)
+		_model_node("semaver", Vector3.ONE * sc, Vector3(CNT_X, TOP, -5.05))
+		_semaver2 = _model_node("semaver", Vector3.ONE * sc, Vector3(CNT_X, TOP, -3.85))
+		_semaver2.name = "SecondSamovar"
+		_semaver2.visible = false
+		_tea_steam_y = TOP + m.size.y * sc + 0.05
+	if _models.has("oven"):
+		var m: AssetModels.Model = _models["oven"]
+		var sc := 1.6 / m.size.x
+		var zc: float = TeaSim.STATION_Z["simit"]
+		var h := m.size.y * sc
+		_model_node("oven", Vector3.ONE * sc, Vector3(CNT_X, TOP, zc))
+		var spot := m.top_spot(0.1, sc)
+		_smoke_pos = Vector3(CNT_X + spot.x, TOP + h + 0.1, zc + spot.y)
+		_ring_y = TOP + h * 0.87
+		_ring_x = CNT_X + 0.15
+	if _models.has("coffee"):
+		var m: AssetModels.Model = _models["coffee"]
+		var sc := 1.65 / m.size.x
+		var zc: float = TeaSim.STATION_Z["coffee"]
+		_model_node("coffee", Vector3.ONE * sc, Vector3(CNT_X, TOP, zc))
+		# foam in the mouths of the model's two cezve pots (measured in the browser with tools/assets/pots.mjs)
+		_pots = [Vector3(CNT_X + 0.1 * sc, TOP + 0.34 * sc, zc - 0.26 * sc), Vector3(CNT_X + 0.1 * sc, TOP + 0.34 * sc, zc + 0.31 * sc)]
+		_pot_steam_dy = 0.15
+	if _models.has("ayran"):
+		var m: AssetModels.Model = _models["ayran"]
+		_model_node("ayran", Vector3(2.5, 1.8 / m.size.y, 2.5), Vector3(CNT_X + 0.2, TOP, TeaSim.STATION_Z["ayran"]))
+	if _models.has("sink"):
+		var m: AssetModels.Model = _models["sink"]
+		_model_node("sink", Vector3.ONE * (1.55 / m.size.z), Vector3(CNT_X + 0.3, TOP, TeaSim.STATION_Z["sink"]))
+	if _models.has("window"):
+		# five windows in one MultiMesh, back flush with the facade (x = -8.1), under the roof slab
+		var m: AssetModels.Model = _models["window"]
+		var sc := 1.05 / m.size.y
+		var wx := -8.1 + m.size.x * sc * 0.5 - 0.04
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = m.mesh
+		mm.instance_count = 5
+		for i in 5:
+			mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ONE * sc), Vector3(wx, 5.2, -7.0 + i * 3.25)))
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "Windows"
+		mmi.multimesh = mm
+		scenery.add_child(mmi)
+	if _models.has("table"):
+		# six tables in one MultiMesh; the white cloth takes each table's colour from the instance colour
+		var m: AssetModels.Model = _models["table"]
+		_table_scale = Vector3(1.8 / m.size.x, 0.98 / m.size.y, 1.8 / m.size.z)
+		var mat := m.material.duplicate() as StandardMaterial3D
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = m.mesh
+		mm.instance_count = TeaSim.TABLE_POS.size()
+		for i in mm.instance_count:
+			mm.set_instance_color(i, Color.hex(TableView.CLOTH[i] * 256 + 255))
+			mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+		_table_mm = MultiMeshInstance3D.new()
+		_table_mm.name = "Tables"
+		_table_mm.multimesh = mm
+		_table_mm.material_override = mat
+		props.add_child(_table_mm)
+	if ground_tex != null:
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(31.5, 23.0)
+		var gm := StandardMaterial3D.new()
+		gm.albedo_texture = ground_tex
+		gm.uv1_scale = Vector3(31.5 / 5.0, 23.0 / 5.0, 1.0)
+		gm.texture_repeat = true
+		gm.roughness = 1.0
+		gm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		plane.material = gm
+		var gn := _mesh_node(plane, scenery, false)
+		gn.name = "Cobblestones"
+		gn.position = Vector3(-14.0 + 31.5 / 2.0, 0.015, -9.0 + 23.0 / 2.0)
+
+
 func _build_dynamic() -> void:
 	# tables
 	for i in TeaSim.TABLE_POS.size():
 		var tv := TableView.new()
 		tv.name = "Table%d" % i
 		props.add_child(tv)
-		tv.setup(i)
+		tv.setup(i, _models.has("table"))
 		_tables.append(tv)
 	# oven glow, simit rings and coffee foam
 	_oven_mat = StandardMaterial3D.new()
@@ -231,6 +349,12 @@ func _build_dynamic() -> void:
 	_oven_glow = _mesh_node(glow_box, props, false)
 	_oven_glow.material_override = _oven_mat
 	_oven_glow.position = Vector3(CNT_X + 0.73, 2.07, TeaSim.STATION_Z["simit"])
+	if _models.has("oven"):
+		# the glow sits at the back of the model's arched mouth (measured in the browser with tools/assets/front.mjs)
+		var osc := 1.6 / (_models["oven"] as AssetModels.Model).size.x
+		var zc: float = TeaSim.STATION_Z["simit"]
+		_oven_glow.position = Vector3(CNT_X - 0.03 * osc, TOP + 0.32 * osc, zc - 0.045 * osc)
+		_oven_glow.scale = Vector3(1.0, 0.24 * osc / 0.62, 0.33 * osc / 0.82)
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.095
 	torus.outer_radius = 0.245
@@ -239,7 +363,7 @@ func _build_dynamic() -> void:
 	for k in 3:
 		var r := _mesh_node(torus, props)
 		r.material_override = Palette.flat(0xd9983a)
-		r.position = Vector3(CNT_X + 0.05, 2.86, TeaSim.STATION_Z["simit"] + (k - 1) * 0.45)
+		r.position = Vector3(_ring_x, _ring_y, TeaSim.STATION_Z["simit"] + (k - 1) * 0.45)
 		r.rotation.y = 0.3 * k
 		r.visible = false
 		_rings.append(r)
@@ -253,28 +377,23 @@ func _build_dynamic() -> void:
 		var fm := StandardMaterial3D.new()
 		fm.albedo_color = Color("6b4226")
 		f.material_override = fm
-		f.position = Vector3(CNT_X + 0.05, 1.66, TeaSim.STATION_Z["coffee"] + (1 if k == 1 else -1) * 0.45)
+		f.position = _pots[k]
 		f.visible = false
 		_foam.append(f)
 		_foam_mats.append(fm)
 	# steam
-	_steam_kettles.append(fx.make_emitter("steam", Vector3(CNT_X, 3.3, -5.05), 6))
-	_steam_kettles.append(fx.make_emitter("steam", Vector3(CNT_X, 3.3, -3.85), 6))
-	_smoke_oven = fx.make_emitter("smoke", Vector3(CNT_X - 0.45, 3.7, TeaSim.STATION_Z["simit"] - 0.5), 5)
+	_steam_kettles.append(fx.make_emitter("steam", Vector3(CNT_X, _tea_steam_y, -5.05), 6))
+	_steam_kettles.append(fx.make_emitter("steam", Vector3(CNT_X, _tea_steam_y, -3.85), 6))
+	_smoke_oven = fx.make_emitter("smoke", _smoke_pos, 5)
 	for k in 2:
-		_steam_pots.append(fx.make_emitter("steam", Vector3(CNT_X + 0.05, 1.9, TeaSim.STATION_Z["coffee"] + (1 if k == 1 else -1) * 0.45), 4))
+		_steam_pots.append(fx.make_emitter("steam", _pots[k] + Vector3(0, _pot_steam_dy, 0), 4))
 	# waiter + apprentice
 	_waiter = Node3D.new()
 	_waiter.name = "Waiter"
 	props.add_child(_waiter)
 	_mesh_node(WorldBuilder.waiter(0xf6efe0, 0x3b2a22, Palette.RED, 0x20150f), _waiter)
-	var item_mesh := CylinderMesh.new()
-	item_mesh.top_radius = 0.1
-	item_mesh.bottom_radius = 0.08
-	item_mesh.height = 0.2
-	item_mesh.radial_segments = 8
 	for k in 5:
-		var it := _mesh_node(item_mesh, _waiter)
+		var it := _mesh_node(ItemModels.mesh("tea"), _waiter)
 		it.visible = false
 		_tray_items.append(it)
 	_apprentice = Node3D.new()
@@ -282,16 +401,18 @@ func _build_dynamic() -> void:
 	props.add_child(_apprentice)
 	_mesh_node(WorldBuilder.waiter(0x7fa3c9, 0x3a5f8a, 0xf4f0e6, 0x5a3a22), _apprentice)
 	_apprentice.scale = Vector3(0.92, 0.92, 0.92)
-	_appr_item = _mesh_node(item_mesh, _apprentice)
-	_appr_item.position = Vector3(0, 1.17, 0.7)
-	_appr_item.material_override = Palette.flat(0x8d857c)
+	_appr_item = _mesh_node(ItemModels.mesh("glass"), _apprentice)
+	_appr_item.position = Vector3(0, 1.08, 0.55)
 	_appr_item.visible = false
 	_apprentice.visible = false
 	# ambient: cat, gulls, ferry
 	_cat = Node3D.new()
 	_cat.name = "Cat"
 	props.add_child(_cat)
-	_mesh_node(WorldBuilder.cat(), _cat)
+	if _models.has("cat"):
+		_model_node("cat", Vector3.ONE * (0.85 / (_models["cat"] as AssetModels.Model).size.x), Vector3.ZERO, _cat)
+	else:
+		_mesh_node(WorldBuilder.cat(), _cat)
 	_cat_nav = NavGrid.new(TeaSim.TABLE_POS)
 	_cat_mover.pos = CAT_HOME
 	_cat_mover.face = PI / 2.0
@@ -311,7 +432,11 @@ func _build_dynamic() -> void:
 	_ferry = Node3D.new()
 	_ferry.name = "Ferry"
 	props.add_child(_ferry)
-	_mesh_node(WorldBuilder.ferry(), _ferry)
+	if _models.has("ferry"):
+		# 8 m long, sunk 0.55 m into the water, bow towards +X (the direction it sails)
+		_model_node("ferry", Vector3.ONE * (8.0 / (_models["ferry"] as AssetModels.Model).size.x), Vector3(0, -0.55, 0), _ferry)
+	else:
+		_mesh_node(WorldBuilder.ferry(), _ferry)
 	_ferry.position = Vector3(_ferry_x, 0, -13.6)
 	# hover ring
 	var ring := TorusMesh.new()
@@ -418,6 +543,9 @@ func is_behind(world_pos: Vector3) -> bool:
 # ---- per-frame sync --------------------------------------------------------
 
 func _process(delta: float) -> void:
+	# everything stands still while the game is paused (the ferry, gulls and cat too)
+	if GameState.paused:
+		delta = 0.0
 	_vt += delta
 	_update_ambient(delta)
 	_update_hover()
@@ -449,6 +577,10 @@ func _update_tables(s: TeaSim) -> void:
 	var stool_level := int(s.up["stool"])
 	for i in _tables.size():
 		_tables[i].update_view(s.tables[i], stool_level)
+		if _table_mm != null:
+			var tv := _tables[i]
+			var sc := _table_scale * tv.scale if tv.visible else Vector3.ZERO
+			_table_mm.multimesh.set_instance_transform(i, Transform3D(Basis.from_scale(sc), tv.position))
 
 
 func _update_stations(s: TeaSim) -> void:
@@ -466,8 +598,6 @@ func _update_stations(s: TeaSim) -> void:
 		var p := s.pots[k]
 		var sc := 0.0
 		var col := Color("6b4226")
-		var drop := 0.0
-		var flat := 0.8
 		if p.state == "cook":
 			sc = 0.02 + (p.t / s.balance.cook_time) * 0.12
 			col = Color("7a4a2a")
@@ -476,12 +606,15 @@ func _update_stations(s: TeaSim) -> void:
 			col = Color("b98a56")
 		elif p.state == "spilled":
 			sc = 0.02
-			col = Color("1e140c")
-			drop = -0.5
-			flat = 0.5
+			col = Color("2e1d10")
 		_foam[k].visible = sc > 0.0
-		_foam[k].scale = Vector3(sc * 1.2, sc * flat, sc * 1.2)
-		_foam[k].position.y = 1.66 + drop
+		if p.state == "spilled":
+			# boiled over: a wide, flat, dark froth spread over the pot mouth
+			_foam[k].scale = Vector3(0.26, 0.05, 0.26)
+			_foam[k].position = _pots[k] + Vector3(0, 0.01, 0)
+		else:
+			_foam[k].scale = Vector3(sc * 1.2, sc * 0.8, sc * 1.2)
+			_foam[k].position = _pots[k]
 		_foam_mats[k].albedo_color = col
 		_steam_pots[k].emitting = (p.state == "cook" and p.t > s.balance.cook_time * 0.5) or p.state == "ready"
 	for k in 2:
@@ -501,10 +634,12 @@ func _update_staff(s: TeaSim) -> void:
 		var node := _tray_items[k]
 		if k < w.tray.size():
 			node.visible = true
-			node.position = Vector3(slots_x[k], 1.17, slots_z[k])
+			node.position = Vector3(slots_x[k], 1.07, slots_z[k])
 			var it := w.tray[k]
-			var col := 0x8d857c if it == "dirty" else (GameData.item(it).color.to_rgba32() >> 8)
-			node.material_override = Palette.flat(col)
+			var look := ItemModels.for_slot("tea" if it == "dirty" else it, it == "dirty")
+			if node.mesh != look[0]:
+				node.mesh = look[0]
+				node.material_override = look[1]
 		else:
 			node.visible = false
 	var a := s.apprentice

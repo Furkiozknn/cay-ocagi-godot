@@ -31,6 +31,12 @@ func key(code: Key, pressed: bool = true) -> void:
 	Input.parse_input_event(ev)
 
 
+## Press and release (a focused button acts on the release).
+func tap(code: Key) -> void:
+	key(code, true)
+	key(code, false)
+
+
 func click(pos: Vector2, button: MouseButton = MOUSE_BUTTON_LEFT) -> void:
 	for pressed in [true, false]:
 		var ev := InputEventMouseButton.new()
@@ -46,10 +52,23 @@ func _ready() -> void:
 	_run.call_deferred()
 
 
+func _find_button(text: String, n: Node = null) -> Button:
+	if n == null:
+		n = _screens
+	if n is Button and (n as Button).text == text and (n as Button).is_visible_in_tree():
+		return n as Button
+	for c in n.get_children():
+		var b := _find_button(text, c)
+		if b != null:
+			return b
+	return null
+
+
 func _run() -> void:
 	GameState.save_path = "user://ui_smoke_save.json"
 	var old_lang := Settings.lang
 	var old_quality := Settings.quality
+	var old_vol := [Settings.master_volume, Settings.music_volume, Settings.sfx_volume]
 	_main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	get_tree().root.add_child(_main)
 	await frames(6)
@@ -60,6 +79,25 @@ func _run() -> void:
 	check(GameState.phase == "title", "starts on the title")
 	check(_screens.current() == "title", "title card is shown")
 	check(GameState.demo and GameState.sim != null, "demo day runs behind the title")
+	var focused := get_viewport().gui_get_focus_owner()
+	check(focused is Button, "a title button has the keyboard focus")
+
+	# with a saved run, "New game" asks before overwriting it
+	GameState.save_progress("intro")
+	_screens.show_screen("title")
+	await frames(3)
+	var new_game := _find_button(Loc.t("newGame"))
+	check(new_game != null, "title offers New game next to Continue")
+	if new_game != null:
+		new_game.pressed.emit()
+		await frames(2)
+	check(_screens.current() == "confirm", "New game opens the confirm card")
+	tap(KEY_ESCAPE)
+	await frames(2)
+	check(_screens.current() == "title" and GameState.has_save(), "Esc goes back and keeps the save")
+	GameState.delete_save()
+	_screens.show_screen("title")
+	await frames(2)
 
 	# language switch rebuilds the card
 	Settings.set_language("en")
@@ -101,9 +139,9 @@ func _run() -> void:
 	await frames(2)
 	var queued := sim.waiter.queue.size() + (0 if sim.waiter.current.is_empty() else 1)
 	check(queued == 2, "clicking a table queues it (queue is %d)" % queued)
-	key(KEY_ESCAPE)
+	tap(KEY_BACKSPACE)
 	await frames(2)
-	check(sim.waiter.queue.is_empty(), "escape clears the queue")
+	check(sim.waiter.queue.is_empty(), "backspace clears the queue")
 	# right click also clears
 	key(KEY_2)
 	await frames(1)
@@ -133,17 +171,49 @@ func _run() -> void:
 	var clock := sim.clock
 	await frames(10)
 	check(sim.clock == clock, "paused time does not advance")
-	key(KEY_SPACE)
+	check(get_viewport().gui_get_focus_owner() is Button, "the pause card focuses Resume")
+	tap(KEY_SPACE)
 	await frames(2)
 	check(not GameState.paused and not _screens.is_open(), "space resumes")
+	# Esc pauses, P resumes; number keys do nothing while paused
+	tap(KEY_ESCAPE)
+	await frames(2)
+	check(GameState.paused, "Esc pauses")
+	sim.clear_queue()
+	tap(KEY_1)
+	await frames(2)
+	check(sim.waiter.queue.is_empty(), "keys 1-5 are ignored while paused")
+	tap(KEY_P)
+	await frames(2)
+	check(not GameState.paused, "P resumes")
+	# M / X switch music and effects
+	var music := Settings.music_volume
+	tap(KEY_M)
+	await frames(1)
+	check(Settings.music_volume == 0.0, "M mutes the music")
+	tap(KEY_M)
+	await frames(1)
+	check(is_equal_approx(Settings.music_volume, music), "M brings it back")
+	var fx_vol := Settings.sfx_volume
+	tap(KEY_X)
+	await frames(1)
+	check(Settings.sfx_volume == 0.0, "X mutes the effects")
+	tap(KEY_X)
+	await frames(1)
+	check(is_equal_approx(Settings.sfx_volume, fx_vol), "X brings them back")
+	# the HUD counter shows today's coins, not the wallet
+	GameState.coins = 500
+	sim.day_coins = 7
+	await frames(2)
+	check(_hud._coin_label.text == "7", "HUD coins are today's coins (%s)" % _hud._coin_label.text)
 
 	# settings from the HUD while playing
 	_hud.settings_requested.emit()
 	await frames(3)
 	check(GameState.paused and _screens.current() == "settings", "gear opens settings over a paused game")
-	_screens.close_settings()
+	tap(KEY_ESCAPE)
 	await frames(2)
-	check(_screens.current() == "pause", "back from settings returns to the pause card")
+	check(_screens.current() == "pause" and GameState.paused, "Esc closes settings back to the pause card")
 	GameState.toggle_pause()
 	await frames(2)
 
@@ -163,7 +233,8 @@ func _run() -> void:
 	await frames(3)
 	check(GameState.phase == "summary" or GameState.phase == "gameover", "day ended (%s)" % GameState.phase)
 	if GameState.phase == "gameover":
-		GameState.retry_day()
+		GameState.retry_via_shop()
+		GameState.next_day()
 		GameState.begin_day()
 		GameState.coins = 500
 		GameState.sim.day_coins = 500
@@ -190,6 +261,9 @@ func _run() -> void:
 		line = "UI SMOKE FAILED %d/%d" % [_failed, _total]
 	Settings.lang = old_lang
 	Settings.quality = old_quality
+	Settings.master_volume = old_vol[0]
+	Settings.music_volume = old_vol[1]
+	Settings.sfx_volume = old_vol[2]
 	Settings.save()
 	if FileAccess.file_exists(GameState.save_path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(GameState.save_path))

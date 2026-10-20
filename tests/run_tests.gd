@@ -23,6 +23,7 @@ func eq(actual: Variant, expected: Variant, message: String) -> void:
 
 func _ready() -> void:
 	GameState.save_path = "user://test_save.json"
+	GameState.no_save = false
 	for method in get_method_list():
 		var n: String = method["name"]
 		if n.begins_with("test_"):
@@ -322,6 +323,206 @@ func test_same_seed_same_day() -> void:
 	run(b, 60.0)
 	eq(a.spawn_count, b.spawn_count, "same spawn count")
 	eq(JSON.stringify(a.to_dict()), JSON.stringify(b.to_dict()), "same state after 60 s")
+
+
+# ---- overnight pass: money rules, tray, apprentice, last orders -------------
+
+## A party seated at table 0 that has been served everything and is eating.
+func _eating_party(sim: TeaSim) -> TeaSim.Party:
+	var guard := 0
+	while guard < 60 * 60:
+		sim.step(1.0 / 60.0)
+		guard += 1
+		if not sim.parties.is_empty() and sim.parties[0].state == "wait":
+			break
+	var party := sim.parties[0]
+	for o in party.order:
+		o["done"] = true
+	party.state = "eat"
+	party.timer = 99.0
+	party.final_frac = 1.0
+	return party
+
+
+func test_closing_time_pays_eating_parties() -> void:
+	var sim := make_sim(1, {}, 3)
+	var party := _eating_party(sim)
+	var bill := 0
+	for o in party.order:
+		bill += GameData.item(o["item"]).price
+	var tip := roundi(bill * sim.balance.tip_rate * party.cust.tip_mul)
+	var before := sim.day_coins
+	var happy_before := sim.happy
+	sim.clock = sim.day_len - 0.01
+	sim.step(1.0 / 60.0)
+	check(sim.finished, "the day closed")
+	eq(sim.day_coins - before, bill + tip, "an eating party pays bill + full tip at closing time")
+	eq(sim.happy, happy_before + 1, "and counts as happy")
+	sim.close_day()
+	eq(sim.day_coins - before, bill + tip, "closing twice does not pay twice")
+
+
+func test_dirty_glass_stays_on_the_tray() -> void:
+	var sim := make_sim(4)
+	sim.waiter.tray.append("dirty")
+	sim.waiter.tray.append("ayran")
+	var toasts: Array[String] = []
+	sim.toast.connect(func(key: String, _tone: String) -> void: toasts.append(key))
+	check(not sim.drop_tray(0), "a dirty glass cannot be thrown away")
+	eq(sim.waiter.tray.size(), 2, "the tray keeps it")
+	check(toasts.has("toastDirtyDrop"), "the player is told to use the sink")
+	check(sim.drop_tray(1), "a clean item can still be dropped")
+	eq(sim.waiter.tray, ["dirty"] as Array[String], "only the dirty glass is left")
+
+
+func test_waiter_clearing_a_claimed_table_frees_the_apprentice() -> void:
+	var sim := make_sim(4, {"apprentice": 1}, 5)
+	var tb := sim.tables[1]
+	tb.dirty = true
+	tb.slots.append({"kind": "glass", "item": "tea", "dirty": true})
+	sim.step(1.0 / 60.0)
+	check(tb.claimed and sim.apprentice.table == tb, "the apprentice claims the dirty table")
+	sim._do_table(1)
+	check(not tb.claimed, "the waiter's pick-up unclaims it")
+	eq(sim.apprentice.state, "back", "the apprentice walks back home")
+	check(sim.apprentice.table == null and not sim.apprentice.carrying, "with nothing in hand")
+	run(sim, 10.0)
+	eq(sim.apprentice.state, "idle", "and waits at home again")
+
+
+func test_last_orders() -> void:
+	var sim := make_sim(1, {}, 2)
+	var toasts: Array[String] = []
+	sim.toast.connect(func(key: String, _tone: String) -> void: toasts.append(key))
+	run(sim, sim.day_len - sim.balance.last_spawn_before_end - 1.0)
+	check(not sim.last_call, "no last call before the final 20 s")
+	run(sim, 2.0)
+	check(sim.last_call, "last call in the final 20 s")
+	eq(toasts.count("lastOrders"), 1, "one last-orders toast")
+	var spawned := sim.spawn_count
+	run(sim, 15.0)
+	eq(sim.spawn_count, spawned, "no new customers after last orders")
+	eq(toasts.count("lastOrders"), 1, "still only one toast")
+
+
+func test_failed_day_keeps_coins_and_retries_through_the_shop() -> void:
+	GameState.start_new()
+	GameState.coins = 40
+	GameState.total_earned = 0
+	GameState.begin_day()
+	GameState.sim.day_coins = 10
+	GameState.fast_forward(GameState.sim.day_len + 1.0)
+	eq(GameState.phase, "gameover", "10 coins on day 1 fails")
+	eq(GameState.coins, 50, "the failed day's coins are kept")
+	check(GameState.retrying, "retry mode is on")
+	var d := GameState._read_save()
+	check(d.has("progress") and d["progress"]["resume"] == "shop" and d["progress"]["retrying"], "saved as shop + retrying")
+	GameState.retry_via_shop()
+	eq(GameState.phase, "shop", "Shop & retry opens the shop")
+	GameState.next_day()
+	eq(GameState.day, 1, "the shop's button retries the same day")
+	eq(GameState.phase, "intro", "at its intro")
+	check(not GameState.retrying, "retry mode is off again")
+	GameState.next_day()
+	eq(GameState.day, 2, "after that the shop moves on as usual")
+	GameState.delete_save()
+	GameState.to_menu()
+
+
+func test_continue_a_failed_day_7_retries_instead_of_winning() -> void:
+	GameState.start_new()
+	GameState.day = 7
+	GameState.retrying = true
+	GameState.won = false
+	GameState.save_progress("shop")
+	check(GameState.continue_game(), "continue finds the save")
+	eq(GameState.phase, "shop", "a failed day 7 resumes in the shop, not on the victory screen")
+	check(GameState.retrying, "still retrying")
+	GameState.delete_save()
+	GameState.to_menu()
+
+
+func test_restart_day_restores_the_start_of_the_day() -> void:
+	GameState.start_new()
+	GameState.coins = 70
+	GameState._enter_intro()
+	GameState.begin_day()
+	GameState.coins = 999
+	GameState.sim.day_coins = 33
+	GameState.restart_day()
+	eq(GameState.phase, "play", "restart goes straight back into play")
+	eq(GameState.coins, 70, "coins from the start of the day")
+	eq(GameState.sim.day_coins, 0, "a fresh day")
+	eq(GameState.sim.clock, 0.0, "clock at the start")
+	GameState.delete_save()
+	GameState.to_menu()
+
+
+func test_new_record_and_victory_endless() -> void:
+	GameState.best = {"day": 0, "total": 0}
+	GameState.start_new()
+	GameState.begin_day()
+	GameState.sim.day_coins = 500
+	GameState.fast_forward(GameState.sim.day_len + 1.0)
+	eq(GameState.phase, "summary", "a big day passes")
+	check(GameState.new_record, "first cleared day is a new record")
+	GameState.begin_day()
+	check(not GameState.new_record, "the badge resets when the next day starts")
+	GameState.day = GameData.balance().win_day
+	GameState.won = false
+	GameState.after_summary()
+	eq(GameState.phase, "victory", "day 7 summary leads to victory")
+	check(GameState.endless and GameState.won, "victory saves won + endless")
+	GameState.delete_save()
+	GameState.to_menu()
+	GameState.best = {"day": 0, "total": 0}
+
+
+func test_volume_toggles_and_defaults() -> void:
+	var s := Settings
+	var keep := [s.master_volume, s.music_volume, s.sfx_volume]
+	var fresh: Node = load("res://scripts/autoload/settings.gd").new()
+	check(is_equal_approx(fresh.master_volume, 0.8) and is_equal_approx(fresh.music_volume, 0.6) and is_equal_approx(fresh.sfx_volume, 0.8), "defaults 0.8 / 0.6 / 0.8")
+	fresh.free()
+	s.music_volume = 0.5
+	check(not s.toggle_volume("music"), "M turns the music off")
+	eq(s.music_volume, 0.0, "music at zero")
+	check(s.toggle_volume("music"), "M again turns it back on")
+	eq(s.music_volume, 0.5, "at the volume it had")
+	s.sfx_volume = 0.0
+	check(s.toggle_volume("sfx"), "X turns silent effects back on")
+	check(s.sfx_volume > 0.0, "effects audible")
+	s.master_volume = keep[0]
+	s.music_volume = keep[1]
+	s.sfx_volume = keep[2]
+	s.save()
+
+
+func test_item_models() -> void:
+	for kind in ["tea", "glass", "simit", "plate", "coffee", "ayran"]:
+		var m := ItemModels.mesh(kind)
+		check(m != null and m.get_surface_count() == 1, "%s model built" % kind)
+		var tris := m.surface_get_array_len(0) / 3
+		check(tris >= 20 and tris <= 400, "%s model is small (%d triangles)" % [kind, tris])
+	var used := ItemModels.for_slot("tea", true)
+	check(used[0] == ItemModels.mesh("glass"), "a finished tea leaves an empty glass")
+	var cup := ItemModels.for_slot("coffee", true)
+	check(cup[0] == ItemModels.mesh("coffee") and cup[1] != null, "a used coffee cup is tinted")
+
+
+func test_generated_models_load() -> void:
+	if not AssetModels.enabled:
+		return
+	var all := AssetModels.load_all()
+	eq(all.size(), AssetModels.NAMES.size(), "all nine GLB models load")
+	for n in all:
+		var m: AssetModels.Model = all[n]
+		check(m.mesh.get_surface_count() == 1, "%s baked into one surface" % n)
+		check(m.material.albedo_texture != null, "%s keeps its texture" % n)
+		if n == "coffee":
+			continue  # normalised before its 45 degree turn
+		var big := maxf(m.size.x, maxf(m.size.y, m.size.z))
+		check(big > 0.9 and big < 1.1, "%s is normalised to 1 (largest side %.2f)" % [n, big])
 
 
 # ---- bot, save and state text ----------------------------------------------

@@ -21,6 +21,10 @@ var up: Dictionary = GameData.empty_upgrades()
 var day_log: Array[Dictionary] = []
 var won := false
 var endless := false
+## Set after a failed day: the shop's button retries the same day instead of moving on.
+var retrying := false
+## True when the day that just ended set a new best result (summary / game over / victory badge).
+var new_record := false
 var paused := false
 var speed := 1
 var sim: TeaSim = null
@@ -30,6 +34,8 @@ var best := {"day": 0, "total": 0}
 var demo := false
 ## Tests point this at a throw-away file so they never touch a real save.
 var save_path := DEFAULT_SAVE_PATH
+## --no-save: nothing is read from or written to disk (tests, screenshots).
+var no_save := false
 
 # command line flags (everything after `--` on the godot command line)
 var auto := false
@@ -97,6 +103,8 @@ func _parse_args() -> void:
 				arg_sim = float(val)
 			"--save":
 				save_path = "user://%s.json" % val
+			"--no-save":
+				no_save = true
 			"--skill":
 				arg_skill = clampf(float(val), 0.1, 2.0)
 			"--open":
@@ -207,6 +215,8 @@ func start_new() -> void:
 	_stop_demo()
 	won = false
 	endless = false
+	retrying = false
+	new_record = false
 	up = GameData.empty_upgrades()
 	day_log.clear()
 	total_earned = 0
@@ -223,7 +233,7 @@ func continue_game() -> bool:
 	_stop_demo()
 	_new_sim(day)
 	if _resume == "shop":
-		if day == GameData.balance().win_day and not won:
+		if day == GameData.balance().win_day and not won and not retrying:
 			after_summary()
 		else:
 			go_shop()
@@ -242,6 +252,7 @@ func _enter_intro() -> void:
 func begin_day() -> void:
 	_new_sim(day, arg_seed + day * 7919 if arg_seed != 0 else 0)
 	paused = false
+	new_record = false
 	_set_phase("play")
 	if arg_sim > 0.0:
 		var s := arg_sim
@@ -257,26 +268,32 @@ func _end_day() -> void:
 		"angry": sim.angry, "stars": stars, "passed": passed, "served": sim.served, "spawned": sim.spawn_count,
 		"walked_by": sim.walkby,
 	}
-	if passed:
-		coins += sim.day_coins
-		total_earned += sim.day_coins
+	# failed-day rule (same as the browser version): the coins of a failed day are kept too, and the retry goes
+	# through the shop, so the player can buy an upgrade before trying the same day again
+	coins += sim.day_coins
+	total_earned += sim.day_coins
 	day_log.append(last_result)
 	var reached := day if passed else day - 1
-	if reached > 0 and (reached > int(best["day"]) or (reached == int(best["day"]) and total_earned > int(best["total"]))):
+	new_record = reached > 0 and (reached > int(best["day"]) or (reached == int(best["day"]) and total_earned > int(best["total"])))
+	if new_record:
 		best = {"day": reached, "total": total_earned}
 		_save_best_only()
 	if passed:
+		retrying = false
 		Sfx.play("fanfare")
 		save_progress("shop")
 		_set_phase("summary")
 	else:
+		retrying = true
 		Sfx.play("lose")
+		save_progress("shop")
 		_set_phase("gameover")
 
 
 func after_summary() -> void:
 	if day == GameData.balance().win_day and not won:
 		won = true
+		endless = true
 		save_progress("shop")
 		Sfx.play("fanfare")
 		_set_phase("victory")
@@ -313,20 +330,31 @@ func buy(id: String) -> bool:
 	return true
 
 
+## The shop's main button: the next day, or the same day again after a failed one.
 func next_day() -> void:
-	day += 1
-	_auto_retries = 0
+	if retrying:
+		retrying = false
+	else:
+		day += 1
+		_auto_retries = 0
 	_enter_intro()
 
 
-func retry_day() -> void:
+## Game over → "Shop & retry": keep the coins, visit the shop, then play the same day again.
+func retry_via_shop() -> void:
+	retrying = true
+	go_shop()
+
+
+## Pause menu → "Restart the day": back to the coins and upgrades the day began with, then straight into play.
+func restart_day() -> void:
+	if phase != "play":
+		return
 	if not _snap.is_empty():
 		coins = int(_snap["coins"])
 		up = (_snap["up"] as Dictionary).duplicate()
 		total_earned = int(_snap["total"])
-	if not day_log.is_empty():
-		day_log.pop_back()
-	_enter_intro()
+	begin_day()
 
 
 func go_endless() -> void:
@@ -337,6 +365,8 @@ func go_endless() -> void:
 func to_menu() -> void:
 	endless = false
 	won = false
+	retrying = false
+	new_record = false
 	_start_demo()
 	_set_phase("title")
 
@@ -360,7 +390,7 @@ func toggle_speed() -> void:
 	speed_changed.emit(speed)
 
 
-## Coins shown in the HUD: banked coins plus what the running day has earned.
+## Banked coins plus what the running day has earned (the HUD shows only the day's coins).
 func live_coins() -> int:
 	return coins + (sim.day_coins if sim != null and phase == "play" else 0)
 
@@ -368,13 +398,15 @@ func live_coins() -> int:
 # ---- save / load -----------------------------------------------------------
 
 func has_save() -> bool:
-	if not FileAccess.file_exists(save_path):
+	if no_save or not FileAccess.file_exists(save_path):
 		return false
 	var d := _read_save()
 	return d.has("progress") and d["progress"] is Dictionary
 
 
 func _read_save() -> Dictionary:
+	if no_save:
+		return {}
 	var f := FileAccess.open(save_path, FileAccess.READ)
 	if f == null:
 		return {}
@@ -383,6 +415,8 @@ func _read_save() -> Dictionary:
 
 
 func _write_save(data: Dictionary) -> void:
+	if no_save:
+		return
 	var f := FileAccess.open(save_path, FileAccess.WRITE)
 	if f == null:
 		push_warning("Could not write save file")
@@ -397,7 +431,7 @@ func save_progress(resume: String = "intro") -> void:
 	d["best"] = best
 	d["progress"] = {
 		"day": day, "coins": coins, "total_earned": total_earned, "up": up, "won": won, "endless": endless,
-		"log": day_log, "resume": resume,
+		"log": day_log, "resume": resume, "retrying": retrying,
 	}
 	_write_save(d)
 
@@ -426,6 +460,8 @@ func load_progress() -> bool:
 	_resume = str(p.get("resume", "intro"))
 	won = bool(p.get("won", false))
 	endless = bool(p.get("endless", false))
+	retrying = bool(p.get("retrying", false))
+	new_record = false
 	up = GameData.empty_upgrades()
 	var saved_up: Dictionary = p.get("up", {})
 	for id in GameData.UPGRADE_IDS:
@@ -451,7 +487,7 @@ func get_state_text() -> String:
 	var d := {
 		"phase": phase, "lang": Settings.lang, "day": day, "coins": coins, "live_coins": live_coins(),
 		"total_earned": total_earned, "upgrades": up, "paused": paused, "speed": speed, "auto": auto,
-		"won": won, "endless": endless, "demo": demo, "best": best, "last_result": last_result,
+		"won": won, "endless": endless, "retrying": retrying, "new_record": new_record, "demo": demo, "best": best, "last_result": last_result,
 		"days_log": day_log.map(func(r: Dictionary) -> String: return "d%d:%d/%d:%d*" % [r["day"], r["coins"], r["target"], r["stars"]]),
 		"fps": Engine.get_frames_per_second(),
 	}
@@ -505,7 +541,7 @@ func _auto_update(delta: float) -> void:
 				if _auto_retries < 2:
 					_auto_retries += 1
 					_auto_total_retries += 1
-					retry_day()
+					retry_via_shop()
 					_auto_timer = 0.0
 				else:
 					_auto_report()

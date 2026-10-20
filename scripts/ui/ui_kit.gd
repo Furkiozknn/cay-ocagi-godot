@@ -2,7 +2,11 @@ class_name UiKit
 extends RefCounted
 ## Small helpers that build styled Controls (cards, buttons, labels, bars) in code.
 
+## Smallest tap target on touch screens (design language: 44 px).
+const TOUCH_MIN := 44.0
+
 static var _bold: FontVariation = null
+static var _touch := -1
 
 
 static func bold_font() -> Font:
@@ -31,6 +35,24 @@ static func box(bg: Color, radius: int = 14, border: Color = Color(0, 0, 0, 0), 
 	return sb
 
 
+## True on phones / tablets (and touch laptops): buttons grow to at least TOUCH_MIN.
+static func is_touch() -> bool:
+	if _touch < 0:
+		_touch = 1 if DisplayServer.is_touchscreen_available() else 0
+	return _touch == 1
+
+
+## The visible keyboard / gamepad focus ring (amber outline drawn outside the control).
+static func focus_box(radius: int = 14) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.draw_center = false
+	sb.set_corner_radius_all(radius + 3)
+	sb.border_color = Color("f2b632")
+	sb.set_border_width_all(3)
+	sb.set_expand_margin_all(3)
+	return sb
+
+
 static func glass_panel() -> StyleBoxFlat:
 	return box(Palette.UI_GLASS, 16, Palette.UI_GLASS_BORDER, 2, true)
 
@@ -47,10 +69,11 @@ static func label(text: String, size: int = 16, color: Color = Palette.UI_INK, i
 
 
 ## kind: "primary" (amber), "alt" (cream), "small" (compact amber), "mini" (tiny cream), "icon" (square).
+## Buttons take keyboard / gamepad focus; in-game HUD buttons switch it off (they have their own keys).
 static func button(text: String, kind: String = "primary", font_size: int = 18) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
+	b.focus_mode = Control.FOCUS_ALL
 	b.add_theme_font_override("font", bold_font())
 	b.add_theme_font_size_override("font_size", font_size)
 	var normal := Palette.UI_AMBER
@@ -98,6 +121,9 @@ static func button(text: String, kind: String = "primary", font_size: int = 18) 
 	b.add_theme_stylebox_override("hover", h)
 	b.add_theme_stylebox_override("pressed", p)
 	b.add_theme_stylebox_override("disabled", d)
+	b.add_theme_stylebox_override("focus", focus_box(radius))
+	if is_touch() and kind != "mini":
+		b.custom_minimum_size.y = TOUCH_MIN
 	b.mouse_entered.connect(func() -> void:
 		if not b.disabled:
 			Sfx.play("tick", -12.0, 1.4))

@@ -99,7 +99,21 @@ func burst(kind: String, pos: Vector3, count: int) -> void:
 
 ## A continuous emitter that the caller switches on and off with `emitting`.
 func make_emitter(kind: String, pos: Vector3, amount: int = 6) -> CPUParticles3D:
-	var p := _make(kind, false, maxi(2, int(amount * (0.5 if Settings.is_low() else 1.0))))
+	var p := _make(kind, false, _emitter_amount(amount))
 	p.position = pos
+	p.set_meta("base_amount", amount)
 	add_child(p)
 	return p
+
+
+func _emitter_amount(base: int) -> int:
+	return maxi(2, int(base * (0.5 if Settings.is_low() else 1.0)))
+
+
+## Low quality halves the continuous emitters too (they are made once, so a quality change resizes them here).
+func apply_quality() -> void:
+	for c in get_children():
+		if c is CPUParticles3D and c.has_meta("base_amount"):
+			var want := _emitter_amount(int(c.get_meta("base_amount")))
+			if (c as CPUParticles3D).amount != want:
+				(c as CPUParticles3D).amount = want

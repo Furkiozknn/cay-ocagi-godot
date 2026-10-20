@@ -8,6 +8,8 @@ signal sfx(sound: String)
 signal burst(kind: String, pos: Vector3, count: int)
 signal floating(pos: Vector3, text: String, tone: String)
 signal day_ended
+## Coins paid at a table (for the coin fly to the HUD counter).
+signal paid(pos: Vector3, amount: int)
 
 const STATION_IDS: Array[String] = ["tea", "simit", "coffee", "ayran", "sink"]
 const LANE_X := -5.1
@@ -174,6 +176,8 @@ var missed := 0
 var spawn_t := 0.0
 var spawn_count := 0
 var walkby := 0
+## True once no new customers will come today (the last `last_spawn_before_end` seconds).
+var last_call := false
 var finished := false
 
 
@@ -289,10 +293,16 @@ func click_table(i: int) -> bool:
 	return _enqueue({"type": "table", "id": i})
 
 
-func drop_tray(k: int) -> void:
-	if k >= 0 and k < waiter.tray.size():
-		waiter.tray.remove_at(k)
-		sfx.emit("tick")
+## Throws one item off the tray. Dirty glasses can only leave the tray at the sink.
+func drop_tray(k: int) -> bool:
+	if k < 0 or k >= waiter.tray.size():
+		return false
+	if waiter.tray[k] == "dirty":
+		toast.emit("toastDirtyDrop", "bad")
+		return false
+	waiter.tray.remove_at(k)
+	sfx.emit("tick")
+	return true
 
 
 func clear_queue() -> void:
@@ -323,8 +333,19 @@ func step(dt: float) -> void:
 	_apprentice_update(dt)
 	_people_update(dt)
 	if clock >= day_len:
-		finished = true
-		day_ended.emit()
+		close_day()
+
+
+## Closing time: tables that were fully served and are still eating pay their bill and tip now.
+func close_day() -> void:
+	if finished:
+		return
+	for p in parties:
+		if p.state == "eat":
+			_pay_party(p)
+			p.state = "paid"
+	finished = true
+	day_ended.emit()
 
 
 func _stations_update(dt: float) -> void:
@@ -499,6 +520,8 @@ func _do_table(i: int) -> void:
 		tb.slots.clear()
 		did = true
 		sfx.emit("clink")
+		if tb.claimed:
+			_unclaim(tb)
 	if not did:
 		toast.emit("toastNothing", "")
 
@@ -544,6 +567,17 @@ func _waiter_update(dt: float) -> void:
 				_do_table(a["id"])
 	else:
 		w.moving = false
+
+
+## The waiter cleared a table the apprentice was heading for: the apprentice walks back home.
+func _unclaim(tb: Table) -> void:
+	tb.claimed = false
+	var a := apprentice
+	if a != null and a.table == tb:
+		a.table = null
+		a.carrying = false
+		a.path = nav.find_path(a.pos, APPRENTICE_HOME)
+		a.state = "back"
 
 
 func _apprentice_update(dt: float) -> void:
@@ -681,6 +715,10 @@ func _spawn_party() -> bool:
 
 func _spawn_update(dt: float) -> void:
 	if clock > day_len - balance.last_spawn_before_end:
+		if not last_call:
+			last_call = true
+			toast.emit("lastOrders", "")
+			sfx.emit("bell")
 		return
 	spawn_t -= dt
 	if spawn_t <= 0.0:
@@ -728,6 +766,7 @@ func _add_coins(n: int, at: Vector2, tip: int) -> void:
 	day_tips += tip
 	sfx.emit("cash")
 	floating.emit(Vector3(at.x, 2.4, at.y), "+%d" % n if tip == 0 else "+%d (%d)" % [n, tip], "coin")
+	paid.emit(Vector3(at.x, 1.6, at.y), n)
 	burst.emit("spark", Vector3(at.x, 1.8, at.y), 8)
 
 
@@ -817,7 +856,7 @@ func to_dict() -> Dictionary:
 	return {
 		"day": day, "clock": snappedf(clock, 0.1), "day_length": day_len, "target": target,
 		"day_coins": day_coins, "tips": day_tips, "happy": happy, "angry": angry, "served": served,
-		"spawned": spawn_count, "walked_by": walkby, "finished": finished,
+		"spawned": spawn_count, "walked_by": walkby, "last_call": last_call, "finished": finished,
 		"waiter": {
 			"state": waiter.state, "pos": [snappedf(waiter.pos.x, 0.01), snappedf(waiter.pos.y, 0.01)],
 			"tray": waiter.tray.duplicate(), "queue": waiter.queue.map(func(a: Dictionary) -> String: return "%s:%s" % [a["type"], a["id"]]),

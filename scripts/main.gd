@@ -71,16 +71,26 @@ func _notification(what: int) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	var playing := GameState.phase == "play" and GameState.sim != null
-	if event.is_action_pressed("pause") and GameState.phase == "play":
-		GameState.toggle_pause()
+	if event.is_action_pressed("pause"):
+		# P / Esc close a panel first (settings, new-game confirm); Space only pauses
+		var is_space := event is InputEventKey and (event as InputEventKey).physical_keycode == KEY_SPACE
+		if (is_space or not screens.close_panel()) and GameState.phase == "play":
+			GameState.toggle_pause()
 		get_viewport().set_input_as_handled()
 		return
+	if event.is_action_pressed("music_toggle"):
+		_toggle_channel("music", "volMusic")
+		return
+	if event.is_action_pressed("sfx_toggle"):
+		_toggle_channel("sfx", "volSfx")
+		return
+	if event.is_action_pressed("lang_toggle"):
+		Settings.toggle_language()
+		return
 	if event.is_action_pressed("clear_queue"):
-		if screens.current() == "settings":
-			screens.close_settings()
-		elif playing and GameState.paused:
-			GameState.toggle_pause()
-		elif playing:
+		if screens.close_panel():
+			pass
+		elif playing and not GameState.paused:
 			GameState.sim.clear_queue()
 		return
 	if not playing or GameState.paused:
@@ -129,6 +139,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif not _pressing:
 			var hit := world.pick_at(mm.position)
 			world.set_hover(hit.get("kind", ""), hit.get("id", -1))
+
+
+## M / X: one channel off or back on, with a short toast while playing.
+func _toggle_channel(bus: String, label_key: String) -> void:
+	var on := Settings.toggle_volume(bus)
+	hud.toast("%s: %s" % [Loc.t(label_key), Loc.t("on") if on else Loc.t("off")])
+	if screens.current() == "settings":
+		screens.show_screen("settings", false)
 
 
 ## Keyboard / gamepad table selection: Q / E (or d-pad left / right) move the ring, Enter serves.
