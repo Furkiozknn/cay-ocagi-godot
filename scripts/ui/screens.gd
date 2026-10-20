@@ -669,11 +669,11 @@ func _build_gameover() -> void:
 	_icon_center("angry", 64.0)
 	_text(Loc.t("goTxt"))
 	_record_badge()
+	# same rows as the browser version: the day played, the day's coins, happy / angry, total coins of the run
+	_row(Loc.t("reached"), str(GameState.day), "star")
 	_row(Loc.t("earned"), "%d / %d" % [r.get("coins", 0), r.get("target", 0)], "coin")
-	_row(Loc.t("happyC"), str(r.get("happy", 0)), "happy")
-	_row(Loc.t("angryC"), str(r.get("angry", 0)), "angry")
-	_row(Loc.t("reached"), str(maxi(GameState.day - 1, 0)), "star")
-	_row(Loc.t("wallet"), str(GameState.coins), "coin")
+	_row(Loc.t("happyC") + " / " + Loc.t("angryC"), "%d / %d" % [r.get("happy", 0), r.get("angry", 0)], "happy")
+	_row(Loc.t("total"), str(GameState.total_earned), "coin")
 	_buttons([
 		{"text": Loc.t("retryShop"), "action": func() -> void: GameState.retry_via_shop()},
 		{"text": Loc.t("menu"), "kind": "alt", "action": func() -> void: GameState.to_menu()},

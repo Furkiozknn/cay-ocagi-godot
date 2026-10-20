@@ -274,7 +274,8 @@ func _end_day() -> void:
 	total_earned += sim.day_coins
 	day_log.append(last_result)
 	var reached := day if passed else day - 1
-	new_record = reached > 0 and (reached > int(best["day"]) or (reached == int(best["day"]) and total_earned > int(best["total"])))
+	# no record for a run that earned nothing or started on a later day (--day)
+	new_record = reached > 0 and total_earned > 0 and arg_day <= 1 and (reached > int(best["day"]) or (reached == int(best["day"]) and total_earned > int(best["total"])))
 	if new_record:
 		best = {"day": reached, "total": total_earned}
 		_save_best_only()
