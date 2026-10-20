@@ -383,7 +383,8 @@ func _stations_update(dt: float) -> void:
 				p.t = 0.0
 				sfx.emit("hiss")
 				toast.emit("toastSpill", "bad")
-				burst.emit("steam", Vector3(CNT_X, 1.5, float(STATION_Z["coffee"])), 10)
+				# "spill": the view puts the steam on pot k of the stove model (pos.z only says which side)
+				burst.emit("spill", Vector3(CNT_X, 1.5, float(STATION_Z["coffee"]) + (0.45 if k else -0.45)), 10)
 
 
 func _do_station(id: String) -> void:

@@ -248,7 +248,7 @@ func _model_node(model_name: String, sc: Vector3, pos: Vector3, parent: Node3D =
 func _place_models(ground_tex: Texture2D) -> void:
 	if _models.has("semaver"):
 		var m: AssetModels.Model = _models["semaver"]
-		var sc := 2.0 / m.size.y
+		var sc := 1.6 / m.size.y  # 1.6 m: taller models hide the teapot crown behind the awning valance
 		# the brass texture is a little dull under the warm light (browser: colour x1.2 in linear light)
 		m.material.albedo_color = Color(1.08, 1.08, 1.08)
 		_model_node("semaver", Vector3.ONE * sc, Vector3(CNT_X, TOP, -5.05))
@@ -467,6 +467,11 @@ func _on_sim_created(s: TeaSim) -> void:
 
 
 func _on_burst(kind: String, pos: Vector3, count: int) -> void:
+	if kind == "spill":
+		# boiled-over coffee: the steam comes from the pot on the stove model (browser: FIT.pots)
+		var k := 0 if pos.z < float(TeaSim.STATION_Z["coffee"]) else 1
+		fx.burst("steam", _pots[k] + Vector3(0, _pot_steam_dy, 0), count)
+		return
 	fx.burst(kind, pos, count)
 
 
