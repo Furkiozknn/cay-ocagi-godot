@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="CustomerData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/customer_data.gd" id="1_s"]
+
+[resource]
+script = ExtResource("1_s")
+id = "office"
+patience = 25.0
+items_min = 1
+items_max = 2
+party_size = 1
+tip_mul = 1.4
+eat_time = 3.2
+walk_speed = 3.2
+body_color = Color(0.2275, 0.2745, 0.3373, 1)

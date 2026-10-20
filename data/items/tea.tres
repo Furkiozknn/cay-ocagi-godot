@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="ItemData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/item_data.gd" id="1_s"]
+
+[resource]
+script = ExtResource("1_s")
+id = "tea"
+price = 3
+weight = 3.0
+color = Color(0.7608, 0.2549, 0.0471, 1)
+tableware = "glass"

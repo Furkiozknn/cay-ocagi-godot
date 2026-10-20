@@ -1,0 +1,40 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/view/world_view.gd" id="2_world"]
+[ext_resource type="Script" path="res://scripts/view/camera_rig.gd" id="3_rig"]
+[ext_resource type="Script" path="res://scripts/view/fx.gd" id="4_fx"]
+[ext_resource type="Script" path="res://scripts/ui/hud.gd" id="5_hud"]
+[ext_resource type="Script" path="res://scripts/ui/screens.gd" id="6_screens"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="World" type="Node3D" parent="."]
+script = ExtResource("2_world")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="World"]
+
+[node name="Sun" type="DirectionalLight3D" parent="World"]
+
+[node name="CameraRig" type="Node3D" parent="World"]
+script = ExtResource("3_rig")
+
+[node name="Camera3D" type="Camera3D" parent="World/CameraRig"]
+
+[node name="Scenery" type="Node3D" parent="World"]
+
+[node name="Sign" type="Label3D" parent="World/Scenery"]
+
+[node name="Props" type="Node3D" parent="World"]
+
+[node name="People" type="Node3D" parent="World"]
+
+[node name="Fx" type="Node3D" parent="World"]
+script = ExtResource("4_fx")
+
+[node name="Hud" type="CanvasLayer" parent="."]
+script = ExtResource("5_hud")
+
+[node name="Screens" type="CanvasLayer" parent="."]
+script = ExtResource("6_screens")

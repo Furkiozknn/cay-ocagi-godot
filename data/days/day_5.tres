@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="DayData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/day_data.gd" id="1_s"]
+
+[resource]
+script = ExtResource("1_s")
+day_index = 5
+menu = PackedStringArray("tea", "simit", "coffee", "ayran")
+type_ids = PackedStringArray("normal", "office")
+type_weights = PackedFloat32Array(70.0, 30.0)
+spawn_gap = 6.0
+target = 195
+new_key = "new5"
+new_icon = "office"
